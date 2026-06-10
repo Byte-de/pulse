@@ -1,0 +1,16 @@
+.build/
+.build-*/
+.swiftpm/
+xcuserdata/
+DerivedData/
+dist/
+*.app
+.DS_Store
+
+# Local engineering notes — contain machine-specific paths/usage details.
+docs/RESEARCH/
+
+# Licensed icon set (Nucleo Pro) — not redistributable in a public repo.
+# The app falls back to SF Symbols when these are absent; drop your own
+# exports here (see PulseIcons.swift for the name mapping).
+Sources/Pulse/Resources/Icons/
