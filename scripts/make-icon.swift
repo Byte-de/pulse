@@ -2,11 +2,9 @@
 //
 //  make-icon.swift — renders the Byte Pulse app icon entirely with CoreGraphics.
 //
-//  Design: dark near-black squircle plate (#2A2A2E → #1C1C1F vertical gradient)
-//  with a soft inner top highlight and a baked-in drop shadow (macOS pre-26
-//  icon style), containing three white pill-shaped bars of increasing height
-//  (usage-meter bar chart motif), slightly off-center, each with a very subtle
-//  white-to-transparent vertical fade.
+//  Design: flat acid-orange squircle plate (#FB8E6A) with a baked-in drop
+//  shadow (macOS pre-26 icon style), carrying the black Byte "B" mark centered
+//  at ~45% of the plate — matching the website touch icon (src/app/icon.svg).
 //
 //  Usage:
 //      swift scripts/make-icon.swift <output-dir>
@@ -51,12 +49,14 @@ let shadowOffsetY: CGFloat = -12
 let shadowBlur: CGFloat = 24
 let shadowAlpha: CGFloat = 0.30
 
-/// Bars (bar-chart / usage-meter motif). Group is shifted 12 pt left of
-/// center to optically balance the rising silhouette.
-let barWidth: CGFloat = 100
-let barXs: [CGFloat] = [288, 450, 612]        // step = width 100 + gap 62
-let barHeights: [CGFloat] = [230, 350, 470]   // increasing left → right
-let barBaselineY: CGFloat = 290
+/// Plate fill — flat acid-orange (byte.de accent), matching the website icon.
+let plateColor: UInt32 = 0xFB8E6A
+
+/// Byte "B" mark: authored in the website icon's 178-pt viewBox and mapped onto
+/// the 824-pt plate (centered, ~45% of the plate). y is flipped at draw time
+/// because the SVG is y-down while this CGContext is y-up.
+let markScale: CGFloat = 824 / 178
+let markFillAlpha: CGFloat = 0.85
 
 let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
 
@@ -114,6 +114,57 @@ func squirclePath(in rect: CGRect, cornerRadius: CGFloat,
 
 // MARK: - Drawing
 
+/// The Byte "B" mark as a CGPath in the website icon's 178-pt design space
+/// (y-down). Transcribed verbatim from usage-tracker-website/src/app/icon.svg.
+func byteMarkPath() -> CGPath {
+    let p = CGMutablePath()
+    p.move(to: CGPoint(x: 108.597, y: 49.0))
+    p.addCurve(to: CGPoint(x: 113.738, y: 49.2947), control1: CGPoint(x: 111.206, y: 49.0), control2: CGPoint(x: 112.511, y: 49.0))
+    p.addCurve(to: CGPoint(x: 116.822, y: 50.5718), control1: CGPoint(x: 114.827, y: 49.556), control2: CGPoint(x: 115.867, y: 49.987))
+    p.addCurve(to: CGPoint(x: 120.665, y: 53.9987), control1: CGPoint(x: 117.898, y: 51.2315), control2: CGPoint(x: 118.821, y: 52.1539))
+    p.addLine(to: CGPoint(x: 124.001, y: 57.3346))
+    p.addCurve(to: CGPoint(x: 127.428, y: 61.1783), control1: CGPoint(x: 125.846, y: 59.1794), control2: CGPoint(x: 126.769, y: 60.1018))
+    p.addCurve(to: CGPoint(x: 128.705, y: 64.2615), control1: CGPoint(x: 128.013, y: 62.1327), control2: CGPoint(x: 128.444, y: 63.1731))
+    p.addCurve(to: CGPoint(x: 129.0, y: 69.4026), control1: CGPoint(x: 129.0, y: 65.4891), control2: CGPoint(x: 129.0, y: 66.7936))
+    p.addLine(to: CGPoint(x: 129.0, y: 75.6667))
+    p.addLine(to: CGPoint(x: 129.0, y: 77.8))
+    p.addCurve(to: CGPoint(x: 128.419, y: 83.4213), control1: CGPoint(x: 129.0, y: 80.7869), control2: CGPoint(x: 129.0, y: 82.2804))
+    p.addCurve(to: CGPoint(x: 126.088, y: 85.752), control1: CGPoint(x: 127.907, y: 84.4248), control2: CGPoint(x: 127.091, y: 85.2407))
+    p.addCurve(to: CGPoint(x: 120.467, y: 86.3333), control1: CGPoint(x: 124.947, y: 86.3333), control2: CGPoint(x: 123.454, y: 86.3333))
+    p.addLine(to: CGPoint(x: 113.8, y: 86.3333))
+    p.addCurve(to: CGPoint(x: 112.395, y: 86.4787), control1: CGPoint(x: 113.053, y: 86.3333), control2: CGPoint(x: 112.68, y: 86.3333))
+    p.addCurve(to: CGPoint(x: 111.812, y: 87.0613), control1: CGPoint(x: 112.144, y: 86.6065), control2: CGPoint(x: 111.94, y: 86.8105))
+    p.addCurve(to: CGPoint(x: 111.667, y: 88.4667), control1: CGPoint(x: 111.667, y: 87.3466), control2: CGPoint(x: 111.667, y: 87.7199))
+    p.addLine(to: CGPoint(x: 111.667, y: 89.5333))
+    p.addCurve(to: CGPoint(x: 111.812, y: 90.9387), control1: CGPoint(x: 111.667, y: 90.2801), control2: CGPoint(x: 111.667, y: 90.6534))
+    p.addCurve(to: CGPoint(x: 112.395, y: 91.5213), control1: CGPoint(x: 111.94, y: 91.1895), control2: CGPoint(x: 112.144, y: 91.3935))
+    p.addCurve(to: CGPoint(x: 113.8, y: 91.6667), control1: CGPoint(x: 112.68, y: 91.6667), control2: CGPoint(x: 113.053, y: 91.6667))
+    p.addLine(to: CGPoint(x: 120.467, y: 91.6667))
+    p.addCurve(to: CGPoint(x: 126.088, y: 92.248), control1: CGPoint(x: 123.454, y: 91.6667), control2: CGPoint(x: 124.947, y: 91.6667))
+    p.addCurve(to: CGPoint(x: 128.419, y: 94.5787), control1: CGPoint(x: 127.091, y: 92.7593), control2: CGPoint(x: 127.907, y: 93.5752))
+    p.addCurve(to: CGPoint(x: 129.0, y: 100.2), control1: CGPoint(x: 129.0, y: 95.7196), control2: CGPoint(x: 129.0, y: 97.2131))
+    p.addLine(to: CGPoint(x: 129.0, y: 102.333))
+    p.addLine(to: CGPoint(x: 129.0, y: 108.597))
+    p.addCurve(to: CGPoint(x: 128.705, y: 113.738), control1: CGPoint(x: 129.0, y: 111.206), control2: CGPoint(x: 129.0, y: 112.511))
+    p.addCurve(to: CGPoint(x: 127.428, y: 116.822), control1: CGPoint(x: 128.444, y: 114.827), control2: CGPoint(x: 128.013, y: 115.867))
+    p.addCurve(to: CGPoint(x: 124.001, y: 120.665), control1: CGPoint(x: 126.769, y: 117.898), control2: CGPoint(x: 125.846, y: 118.821))
+    p.addLine(to: CGPoint(x: 120.665, y: 124.001))
+    p.addCurve(to: CGPoint(x: 116.822, y: 127.428), control1: CGPoint(x: 118.821, y: 125.846), control2: CGPoint(x: 117.898, y: 126.769))
+    p.addCurve(to: CGPoint(x: 113.738, y: 128.705), control1: CGPoint(x: 115.867, y: 128.013), control2: CGPoint(x: 114.827, y: 128.444))
+    p.addCurve(to: CGPoint(x: 108.597, y: 129.0), control1: CGPoint(x: 112.511, y: 129.0), control2: CGPoint(x: 111.206, y: 129.0))
+    p.addLine(to: CGPoint(x: 62.3333, y: 129.0))
+    p.addCurve(to: CGPoint(x: 57.5857, y: 128.795), control1: CGPoint(x: 59.8552, y: 129.0), control2: CGPoint(x: 58.6161, y: 129.0))
+    p.addCurve(to: CGPoint(x: 49.205, y: 120.414), control1: CGPoint(x: 53.3543, y: 127.953), control2: CGPoint(x: 50.0466, y: 124.646))
+    p.addCurve(to: CGPoint(x: 49.0, y: 115.667), control1: CGPoint(x: 49.0, y: 119.384), control2: CGPoint(x: 49.0, y: 118.145))
+    p.addLine(to: CGPoint(x: 49.0, y: 62.3333))
+    p.addCurve(to: CGPoint(x: 49.205, y: 57.5857), control1: CGPoint(x: 49.0, y: 59.8552), control2: CGPoint(x: 49.0, y: 58.6161))
+    p.addCurve(to: CGPoint(x: 57.5857, y: 49.205), control1: CGPoint(x: 50.0466, y: 53.3543), control2: CGPoint(x: 53.3543, y: 50.0466))
+    p.addCurve(to: CGPoint(x: 62.3333, y: 49.0), control1: CGPoint(x: 58.6161, y: 49.0), control2: CGPoint(x: 59.8552, y: 49.0))
+    p.addLine(to: CGPoint(x: 108.597, y: 49.0))
+    p.closeSubpath()
+    return p
+}
+
 /// Draws the full icon into `ctx`, natively at `pixelSize` (vector redraw —
 /// crisp at every size, no resampling).
 func drawIcon(into ctx: CGContext, pixelSize: Int) {
@@ -136,40 +187,17 @@ func drawIcon(into ctx: CGContext, pixelSize: Int) {
     ctx.addPath(plate)
     ctx.clip()
 
-    // 1) Plate: subtle vertical gradient, lighter at the top (#2A2A2E → #1C1C1F).
-    let plateGradient = CGGradient(colorsSpace: srgb,
-                                   colors: [rgb(0x2A2A2E), rgb(0x1C1C1F)] as CFArray,
-                                   locations: [0, 1])!
-    ctx.drawLinearGradient(plateGradient,
-                           start: CGPoint(x: plateRect.midX, y: plateRect.maxY),
-                           end: CGPoint(x: plateRect.midX, y: plateRect.minY),
-                           options: [])
+    // 1) Flat acid-orange plate.
+    ctx.setFillColor(rgb(plateColor))
+    ctx.fill(CGRect(x: 0, y: 0, width: canvas, height: canvas))
 
-    // 2) Soft inner highlight fading down from the top edge.
-    let highlight = CGGradient(colorsSpace: srgb,
-                               colors: [white(0.12), white(0.0)] as CFArray,
-                               locations: [0, 1])!
-    ctx.drawLinearGradient(highlight,
-                           start: CGPoint(x: plateRect.midX, y: plateRect.maxY),
-                           end: CGPoint(x: plateRect.midX, y: plateRect.maxY - 290),
-                           options: [])
-
-    // 3) Three white pill bars of increasing height, very subtle fade to the base.
-    let barGradient = CGGradient(colorsSpace: srgb,
-                                 colors: [white(1.0), white(0.72)] as CFArray,
-                                 locations: [0, 1])!
-    for (x, height) in zip(barXs, barHeights) {
-        let bar = CGRect(x: x, y: barBaselineY, width: barWidth, height: height)
-        let pill = CGPath(roundedRect: bar, cornerWidth: barWidth / 2,
-                          cornerHeight: barWidth / 2, transform: nil)
-        ctx.saveGState()
-        ctx.addPath(pill)
-        ctx.clip()
-        ctx.drawLinearGradient(barGradient,
-                               start: CGPoint(x: bar.midX, y: bar.maxY),
-                               end: CGPoint(x: bar.midX, y: bar.minY),
-                               options: [])
-        ctx.restoreGState()
+    // 2) Byte "B" mark: 178-pt SVG space → 824-pt plate, y flipped (SVG y-down).
+    var t = CGAffineTransform(a: markScale, b: 0, c: 0, d: -markScale,
+                              tx: plateRect.minX, ty: plateRect.maxY)
+    if let mark = byteMarkPath().copy(using: &t) {
+        ctx.addPath(mark)
+        ctx.setFillColor(CGColor(srgbRed: 0, green: 0, blue: 0, alpha: markFillAlpha))
+        ctx.fillPath()
     }
 
     ctx.restoreGState()           // plate clip

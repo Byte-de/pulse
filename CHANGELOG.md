@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-06-10 v1.0.1
+
+- New app icon: the Byte "B" mark on the brand acid-orange plate, matching the
+  pulse.byte.de site icon (replaces the bar-chart motif). Rendered by
+  `scripts/make-icon.swift` onto the standard macOS squircle plate with the
+  baked drop shadow; no other changes.
+
 ## 2026-06-10 v1.0.0
 
 Initial release of **Byte Pulse** — AI usage for your menu bar.
