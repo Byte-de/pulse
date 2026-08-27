@@ -125,6 +125,11 @@ enum PulseColor {
         case .critical: critical
         }
     }
+
+    /// The on-pace tick. Deliberately neutral, never threshold-colored: it marks
+    /// a position on the clock, not a state, and coloring it would compete with
+    /// the fill it is meant to be read against.
+    static let paceMarker = Color.primary.opacity(0.85)
 }
 
 /// Geometry tokens from docs/DESIGN.md §3.2 (4pt grid, concentric radii:
@@ -141,6 +146,10 @@ enum Layout {
     static let panelGap: CGFloat = 6
     static let screenMargin: CGFloat = 8
     static let progressBarHeight: CGFloat = 5
+    /// Pace tick: 2pt wide, standing 3pt proud of the bar (top and bottom) so it
+    /// reads against both the filled and unfilled halves.
+    static let paceMarkerWidth: CGFloat = 2
+    static let paceMarkerOverhang: CGFloat = 3
 }
 
 /// Type scale from docs/DESIGN.md §3.1. Every numeral is monospaced.

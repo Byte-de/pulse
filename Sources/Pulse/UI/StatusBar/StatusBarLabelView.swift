@@ -31,7 +31,8 @@ struct StatusBarLabelView: View {
                 ForEach(activeProviders) { id in
                     ProviderStatBlock(
                         code: descriptors[id]?.shortCode ?? id.rawValue.uppercased(),
-                        record: store.record(for: id)
+                        record: store.record(for: id),
+                        direction: settings.gaugeDirection
                     )
                 }
             }
@@ -48,8 +49,18 @@ struct StatusBarLabelView: View {
 private struct ProviderStatBlock: View {
     let code: String
     let record: ProviderRecord
+    /// Same setting the panel uses. The menu bar shows the *same* number as
+    /// the card behind it, so a reversed panel with a non-reversed menu bar is
+    /// a contradiction the user reads before anything else.
+    var direction: SettingsStore.GaugeDirection = .remaining
 
+    /// Raw utilization, for colour and trend (both always key off consumption).
     private var utilization: Double? { record.snapshot?.primary?.utilization }
+
+    /// The number actually rendered, in the user's chosen direction.
+    private var displayValue: Double? {
+        utilization.map(direction.displayValue(utilization:))
+    }
 
     private var dotColor: Color {
         guard let utilization else { return Color.primary.opacity(0.25) }
@@ -66,11 +77,11 @@ private struct ProviderStatBlock: View {
                         .fill(dotColor)
                         .frame(width: 5, height: 5)
                         .animation(Motion.staleTint, value: record.isStale)
-                    Text(utilization.map(Formatters.percent) ?? "––")
+                    Text(displayValue.map(Formatters.percent) ?? "––")
                         .font(Typo.menuBarValue)
                         .foregroundStyle(.primary)
-                        .contentTransition(.numericText(value: utilization ?? 0))
-                        .animation(Motion.numberTick, value: utilization)
+                        .contentTransition(.numericText(value: displayValue ?? 0))
+                        .animation(Motion.numberTick, value: displayValue)
                 }
                 trendRow
             }
