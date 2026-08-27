@@ -13,6 +13,46 @@ final class SettingsStore {
         case icon
     }
 
+    /// Which direction a limit gauge reads.
+    enum GaugeDirection: String, CaseIterable, Sendable {
+        /// Consumption: bar fills left to right as usage climbs, percentage is
+        /// the amount used (0 -> 100). The conventional progress-bar reading.
+        case used
+        /// Remaining: bar drains right to left, percentage is what is left
+        /// (100 -> 0). Reads as a fuel gauge, and lines up with the on-pace
+        /// tick, which also marks time *remaining*.
+        case remaining
+
+        var title: String {
+            switch self {
+            case .used: "Used (0 to 100%)"
+            case .remaining: "Remaining (100 to 0%)"
+            }
+        }
+
+        /// The number to display for a raw utilization.
+        func displayValue(utilization: Double) -> Double {
+            switch self {
+            case .used: utilization
+            case .remaining: max(0, 100 - utilization)
+            }
+        }
+
+        /// Fraction of the bar to fill, 0...1.
+        func fillFraction(utilization: Double) -> Double {
+            let used = min(max(utilization / 100, 0), 1)
+            return self == .used ? used : 1 - used
+        }
+
+        /// Where the on-pace tick sits, 0...1, given the elapsed fraction of
+        /// the window. It tracks the fill so the two are comparable: under
+        /// `.used` both grow rightward, under `.remaining` both drain leftward.
+        func markerPosition(elapsedFraction: Double) -> Double {
+            let elapsed = min(max(elapsedFraction, 0), 1)
+            return self == .used ? elapsed : 1 - elapsed
+        }
+    }
+
     private enum Key {
         static let refreshInterval = "refreshInterval"
         static let enabledProviders = "enabledProviders"
@@ -25,6 +65,7 @@ final class SettingsStore {
         static let breakdownTimeframe = "breakdownTimeframe"
         static let breakdownSort = "breakdownSort"
         static let useSessionTitles = "useSessionTitles"
+        static let gaugeDirection = "gaugeDirection"
     }
 
     private let defaults: UserDefaults
@@ -46,6 +87,14 @@ final class SettingsStore {
 
     var menuBarStyle: MenuBarStyle {
         didSet { defaults.set(menuBarStyle.rawValue, forKey: Key.menuBarStyle) }
+    }
+
+    /// Whether limit gauges show what is used or what is left. Applies to the
+    /// bar, the headline percentage and the pace tick together: a bar and a
+    /// number that disagreed about direction would be worse than either
+    /// convention on its own.
+    var gaugeDirection: GaugeDirection {
+        didSet { defaults.set(gaugeDirection.rawValue, forKey: Key.gaugeDirection) }
     }
 
     /// Last selected provider tab, restored when the panel reopens.
@@ -103,6 +152,9 @@ final class SettingsStore {
 
         menuBarStyle = defaults.string(forKey: Key.menuBarStyle)
             .flatMap(MenuBarStyle.init(rawValue:)) ?? .stats
+
+        gaugeDirection = defaults.string(forKey: Key.gaugeDirection)
+            .flatMap(GaugeDirection.init(rawValue:)) ?? .remaining
 
         selectedTab = defaults.string(forKey: Key.selectedTab)
             .flatMap(ProviderID.init(rawValue:)) ?? .claude

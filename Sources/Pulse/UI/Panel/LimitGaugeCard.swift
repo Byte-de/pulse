@@ -6,27 +6,40 @@ struct LimitGaugeCard: View {
     let window: LimitWindow
     let trend: Trend?
     var isStale = false
+    /// Used vs remaining. Drives the bar, the headline number and the pace
+    /// tick together, so the card can never show a bar and a percentage that
+    /// disagree about which way is "more left".
+    var direction: SettingsStore.GaugeDirection = .remaining
 
     /// Ticks the countdown caption while visible.
     private let clock = Date.now
+
+    private var displayValue: Double {
+        direction.displayValue(utilization: window.utilization)
+    }
 
     var body: some View {
         CardView {
             VStack(alignment: .leading, spacing: 8) {
                 CardTitleRow(systemImage: window.systemImage, title: window.title) {
                     HStack(spacing: 5) {
-                        Text(Formatters.percent(window.utilization))
+                        Text(Formatters.percent(displayValue))
                             .font(Typo.gaugeValue)
                             .foregroundStyle(.primary)
-                            .contentTransition(.numericText(value: window.utilization))
-                            .animation(Motion.numberTick, value: window.utilization)
+                            .contentTransition(.numericText(value: displayValue))
+                            .animation(Motion.numberTick, value: displayValue)
                         if let trend {
                             TrendBadge(trend: trend)
                         }
                     }
                 }
 
-                GaugeBar(utilization: window.utilization)
+                GaugeBar(
+                    utilization: window.utilization,
+                    paceMarker: window.elapsedFraction(),
+                    direction: direction
+                )
+                .help(paceHelp)
 
                 captionRow
             }
@@ -63,6 +76,35 @@ struct LimitGaugeCard: View {
         }
     }
 
+    /// Says out loud what the bar and tick mean, since neither is
+    /// self-explanatory the first time it is seen. Phrased in the direction the
+    /// user picked, so the tooltip never contradicts the number above it.
+    private var paceHelp: String {
+        let used = window.utilization
+        let left = max(0, 100 - used)
+        guard let elapsed = window.elapsedFraction() else {
+            return direction == .used
+                ? "\(window.title) - \(Formatters.percent(used)) used"
+                : "\(window.title) - \(Formatters.percent(left)) of credits left"
+        }
+        let timeUsed = min(100, max(0, elapsed * 100))
+        let timeLeft = 100 - timeUsed
+        let aheadOfClock = used > timeUsed
+        let gap = Formatters.percent(abs(used - timeUsed))
+        let verdict = aheadOfClock
+            ? "Credits are draining \(gap) faster than the clock"
+            : "Credits are outlasting the clock by \(gap)"
+
+        switch direction {
+        case .used:
+            return "Bar = \(Formatters.percent(used)) used. "
+                + "Tick = \(Formatters.percent(timeUsed)) of the window elapsed. \(verdict)."
+        case .remaining:
+            return "Bar = \(Formatters.percent(left)) of credits left. "
+                + "Tick = \(Formatters.percent(timeLeft)) of the window left. \(verdict)."
+        }
+    }
+
     private func resetCaption(resetsAt: Date, now: Date) -> some View {
         let countdown = Text(Formatters.countdown(to: resetsAt, now: now))
             .foregroundStyle(.primary)
@@ -82,6 +124,7 @@ struct LimitGaugeCard: View {
 struct ExtraLimitsCard: View {
     let title: String
     let windows: [LimitWindow]
+    var direction: SettingsStore.GaugeDirection = .remaining
 
     var body: some View {
         CardView {
@@ -96,8 +139,12 @@ struct ExtraLimitsCard: View {
                                 .lineLimit(1)
                                 .truncationMode(.middle)
                                 .frame(width: 110, alignment: .leading)
-                            GaugeBar(utilization: window.utilization)
-                            Text(Formatters.percent(window.utilization))
+                            GaugeBar(
+                                utilization: window.utilization,
+                                paceMarker: window.elapsedFraction(),
+                                direction: direction
+                            )
+                            Text(Formatters.percent(direction.displayValue(utilization: window.utilization)))
                                 .font(Typo.captionValue)
                                 .foregroundStyle(.secondary)
                                 .frame(width: 34, alignment: .trailing)
@@ -111,7 +158,18 @@ struct ExtraLimitsCard: View {
     }
 
     private func resetHelp(_ window: LimitWindow) -> String {
-        guard let resetsAt = window.resetsAt else { return window.title }
-        return "\(window.title) — resets in \(Formatters.countdown(to: resetsAt))"
+        var parts: [String] = [window.title]
+        if let resetsAt = window.resetsAt {
+            parts.append("resets in \(Formatters.countdown(to: resetsAt))")
+        }
+        if let elapsed = window.elapsedFraction() {
+            let timeUsed = min(100, max(0, elapsed * 100))
+            parts.append(
+                direction == .used
+                    ? "tick at \(Formatters.percent(timeUsed)) of the window elapsed"
+                    : "tick at \(Formatters.percent(100 - timeUsed)) of the window left"
+            )
+        }
+        return parts.joined(separator: " - ")
     }
 }

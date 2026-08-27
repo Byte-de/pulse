@@ -32,6 +32,18 @@ struct SettingsView: View {
                     Text("2 minutes").tag(TimeInterval(120))
                     Text("5 minutes").tag(TimeInterval(300))
                 }
+
+                Picker("Limit gauges show", selection: $settings.gaugeDirection) {
+                    ForEach(SettingsStore.GaugeDirection.allCases, id: \.self) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                Text(settings.gaugeDirection == .used
+                    ? "Bars fill left to right as you spend; the tick marks how much of the window has elapsed."
+                    : "Bars drain right to left like a fuel gauge; the tick marks how much of the window is left.")
+                    .font(Typo.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Menu Bar") {

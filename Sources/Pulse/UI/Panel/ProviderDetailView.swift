@@ -27,18 +27,34 @@ struct ProviderDetailView: View {
     private func cards(for snapshot: UsageSnapshot) -> some View {
         VStack(spacing: Layout.cardGap) {
             if let primary = snapshot.primary {
-                LimitGaugeCard(window: primary, trend: record.primaryTrend, isStale: record.isStale)
+                LimitGaugeCard(
+                    window: primary,
+                    trend: record.primaryTrend,
+                    isStale: record.isStale,
+                    direction: settings.gaugeDirection
+                )
             }
             if let secondary = snapshot.secondary {
-                LimitGaugeCard(window: secondary, trend: record.secondaryTrend, isStale: record.isStale)
+                LimitGaugeCard(
+                    window: secondary,
+                    trend: record.secondaryTrend,
+                    isStale: record.isStale,
+                    direction: settings.gaugeDirection
+                )
             }
             if let tertiary = snapshot.tertiary {
-                LimitGaugeCard(window: tertiary, trend: record.tertiaryTrend, isStale: record.isStale)
+                LimitGaugeCard(
+                    window: tertiary,
+                    trend: record.tertiaryTrend,
+                    isStale: record.isStale,
+                    direction: settings.gaugeDirection
+                )
             }
             if !snapshot.extraWindows.isEmpty {
                 ExtraLimitsCard(
                     title: descriptor.id == .gemini ? "Model Quotas" : "Model Limits",
-                    windows: snapshot.extraWindows
+                    windows: snapshot.extraWindows,
+                    direction: settings.gaugeDirection
                 )
             }
             if snapshot.primary != nil {
