@@ -211,15 +211,15 @@ struct CodexSessionParser: Sendable {
                 }
             }
 
-            let fileTotals = aggregate.models.values.reduce(into: TokenTotals()) { running, tokens in
-                running.add(Self.displayTotals(tokens))
+            let fileTotals = aggregate.models.reduce(into: TokenTotals()) { running, entry in
+                running.add(Self.displayTotals(entry.value, model: entry.key))
             }
 
             if aggregate.dayKey == todayKey { today.add(fileTotals) }
             if aggregate.dayKey.hasPrefix(monthPrefix) {
                 month.add(fileTotals)
                 for (model, tokens) in aggregate.models {
-                    perModelMonth[model, default: .zero].add(Self.displayTotals(tokens))
+                    perModelMonth[model, default: .zero].add(Self.displayTotals(tokens, model: model))
                 }
             }
             if let date = formatter.date(from: aggregate.dayKey) {
@@ -239,7 +239,7 @@ struct CodexSessionParser: Sendable {
             .sorted { $0.share > $1.share }
 
         let tokens: TokenUsageReport? = month.total > 0 || today.total > 0
-            ? TokenUsageReport(today: today, thisMonth: month, modelBreakdown: breakdown, showsCost: false)
+            ? TokenUsageReport(today: today, thisMonth: month, modelBreakdown: breakdown, showsCost: true)
             : nil
 
         let week = UsageMath.lastSevenDays(from: perDay, calendar: calendar, now: now)
@@ -288,7 +288,7 @@ struct CodexSessionParser: Sendable {
             var totals = TokenTotals()
             var perModel: [String: TokenTotals] = [:]
             for (model, tokens) in aggregate.models {
-                let display = displayTotals(tokens)
+                let display = displayTotals(tokens, model: model)
                 totals.add(display)
                 perModel[ModelNames.display(model), default: .zero].add(display)
             }
@@ -317,15 +317,34 @@ struct CodexSessionParser: Sendable {
     }
 
     /// Display mapping: cached prompt tokens are a subset of `input_tokens`,
-    /// so the Input column shows the uncached remainder; Codex usage is plan-
-    /// included, so cost stays nil.
-    static func displayTotals(_ tokens: FileAggregate.Tokens) -> TokenTotals {
-        TokenTotals(
-            input: max(0, tokens.input - tokens.cached),
+    /// so the Input column shows the uncached remainder.
+    ///
+    /// Cost is computed from the token counts against published per-model
+    /// rates, exactly as the Claude parser does. Codex writes no cost into its
+    /// logs, and a plan-included subscription still has a meterable value - the
+    /// figure answers "what would this usage have cost on the API", which is
+    /// the only cost question the logs can answer.
+    ///
+    /// Codex reports no cache-write counter, so `cacheWrite` is zero and the
+    /// cached tokens bill at the cheaper read rate. That makes the estimate a
+    /// floor rather than an exact reproduction of a bill.
+    static func displayTotals(_ tokens: FileAggregate.Tokens, model: String? = nil) -> TokenTotals {
+        let input = max(0, tokens.input - tokens.cached)
+        return TokenTotals(
+            input: input,
             output: tokens.output,
             cacheRead: tokens.cached,
             cacheWrite: 0,
-            costUSD: nil
+            costUSD: model.flatMap {
+                PricingTable.cost(
+                    model: $0,
+                    input: input,
+                    output: tokens.output,
+                    cacheRead: tokens.cached,
+                    cacheWrite5m: 0,
+                    cacheWrite1h: 0
+                )
+            }
         )
     }
 

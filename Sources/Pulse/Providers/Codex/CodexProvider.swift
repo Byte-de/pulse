@@ -104,7 +104,8 @@ actor CodexProvider: UsageProvider, ProjectBreakdownProviding {
             generatedAt: now,
             projects: projects,
             grandTotal: grandTotal,
-            showsCost: false
+            // Costs are computed locally from token counts, same as Claude.
+            showsCost: true
         )
     }
 
