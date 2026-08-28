@@ -25,9 +25,13 @@ final class SettingsWindowController {
         )
         let window = NSWindow(contentViewController: host)
         window.title = "Pulse Settings"
-        window.styleMask = [.titled, .closable, .miniaturizable]
+        // Resizable on purpose: the provider list grows with every Claude
+        // account discovered on the machine, so a fixed height silently puts
+        // the last rows below the fold with no way to reach them.
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 420, height: 480))
+        window.setContentSize(NSSize(width: 420, height: 620))
+        window.minSize = NSSize(width: 420, height: 320)
         window.center()
         return window
     }

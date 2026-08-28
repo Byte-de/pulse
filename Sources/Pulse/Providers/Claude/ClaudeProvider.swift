@@ -3,29 +3,48 @@ import Foundation
 /// Claude usage: live rate-limit windows from the OAuth usage endpoint (the
 /// same one Claude Code's `/usage` calls) plus exact token/cost history from
 /// the local project logs.
+///
+/// One instance per Claude Code **account** (`ClaudeAccount`). Each account has
+/// its own config dir, log tree, parse cache and Keychain item, so two accounts
+/// can never read each other's numbers.
 actor ClaudeProvider: UsageProvider, ProjectBreakdownProviding {
-    nonisolated let id: ProviderID = .claude
-    nonisolated let descriptor = ProviderDescriptor(
-        id: .claude,
-        name: "Claude",
-        shortCode: "CLA",
-        appBundleID: "com.anthropic.claudefordesktop",
-        webURL: URL(string: "https://claude.ai")!,
-        setupHint: "Sign in to Claude Code to start tracking."
-    )
+    nonisolated let id: ProviderID
+    nonisolated let descriptor: ProviderDescriptor
 
     private let api: ClaudeUsageAPI
     private let credentialsStore: ClaudeCredentialsStore
     private let parser: ClaudeLogParser
 
     init(
+        account: ClaudeAccount,
         http: HTTPClient = HTTPClient(),
-        credentialsStore: ClaudeCredentialsStore = ClaudeCredentialsStore(),
-        parser: ClaudeLogParser = ClaudeLogParser()
+        credentialsStore: ClaudeCredentialsStore? = nil,
+        parser: ClaudeLogParser? = nil,
+        captureTitles: Bool = true
     ) {
+        self.id = account.id
+        self.descriptor = ProviderDescriptor(
+            id: account.id,
+            name: account.name,
+            shortCode: account.shortCode,
+            appBundleID: "com.anthropic.claudefordesktop",
+            webURL: URL(string: "https://claude.ai")!,
+            setupHint: "Sign in to Claude Code (\(account.configDir.lastPathComponent)) to start tracking."
+        )
         self.api = ClaudeUsageAPI(http: http)
-        self.credentialsStore = credentialsStore
-        self.parser = parser
+        self.credentialsStore = credentialsStore ?? ClaudeCredentialsStore(
+            fileURL: account.credentialsFile,
+            keychainService: account.keychainService
+        )
+        // The primary account keeps the historical cache names, so upgrading
+        // doesn't force a full re-parse of thousands of session files.
+        self.parser = parser ?? ClaudeLogParser(
+            projectsRoot: account.projectsRoot,
+            captureTitles: captureTitles,
+            cacheName: account.id == .claude
+                ? nil
+                : "\(account.cacheNamespace)-files-v2\(captureTitles ? "" : "-blind")"
+        )
     }
 
     func probeConnection() async -> ProviderConnection {
@@ -40,7 +59,7 @@ actor ClaudeProvider: UsageProvider, ProjectBreakdownProviding {
         let limits = await loadLimits()
         let report = await reportTask
 
-        var snapshot = UsageSnapshot(providerID: .claude, fetchedAt: now)
+        var snapshot = UsageSnapshot(providerID: id, fetchedAt: now)
         snapshot.plan = limits.plan
 
         var limitsError: ProviderFetchError?

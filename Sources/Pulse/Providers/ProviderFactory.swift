@@ -6,12 +6,18 @@ enum ProviderFactory {
     ///   `ai-title` records (off = strictly content-blind). Set from
     ///   `SettingsStore.useSessionTitles` at launch.
     static func makeAll(captureTitles: Bool = true) -> [any UsageProvider] {
-        [
-            ClaudeProvider(parser: ClaudeLogParser(captureTitles: captureTitles)),
-            CodexProvider(),
-            CursorProvider(),
-            CopilotProvider(),
-            GeminiProvider(),
-        ]
+        // Claude accounts are discovered from ~/.claude* at launch, so the
+        // registry has to learn about them before anything reads allCases
+        // (tab order, settings, menu bar).
+        let accounts = ClaudeAccount.discover()
+        ProviderRegistry.shared.register(claudeAccounts: accounts.map(\.id))
+
+        return accounts.map { ClaudeProvider(account: $0, captureTitles: captureTitles) }
+            + [
+                CodexProvider(),
+                CursorProvider(),
+                CopilotProvider(),
+                GeminiProvider(),
+            ]
     }
 }

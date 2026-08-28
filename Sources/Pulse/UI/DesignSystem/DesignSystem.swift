@@ -85,22 +85,47 @@ enum PulseColor {
 
     // §2.5 provider accents — identity only, never state.
     static func accent(_ id: ProviderID) -> Color {
+        // Secondary Claude accounts are not known at compile time, so their
+        // accent is derived: same hue family as Claude, rotated by a hash of
+        // the id so two accounts are always distinguishable and each keeps the
+        // same colour across launches.
+        if id != .claude, id.isClaudeAccount {
+            return claudeAccountAccent(for: id)
+        }
+        // A ProviderID is no longer a closed enum, so this switch cannot be
+        // exhaustive; the default is the real fallback for an id we do not
+        // ship a colour for.
         switch id {
-        case .claude:
-            Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
         case .codex:
-            Color(nsColor: NSColor(name: nil) { appearance in
+            return Color(nsColor: NSColor(name: nil) { appearance in
                 appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     ? NSColor(red: 0xD8 / 255, green: 0xD8 / 255, blue: 0xDC / 255, alpha: 1)
                     : NSColor(red: 0x4A / 255, green: 0x4A / 255, blue: 0x4F / 255, alpha: 1)
             })
         case .cursor:
-            Color(red: 0x8C / 255, green: 0x7C / 255, blue: 0xCD / 255)
+            return Color(red: 0x8C / 255, green: 0x7C / 255, blue: 0xCD / 255)
         case .copilot:
-            Color(red: 0x6E / 255, green: 0x40 / 255, blue: 0xC9 / 255)
+            return Color(red: 0x6E / 255, green: 0x40 / 255, blue: 0xC9 / 255)
         case .gemini:
-            Color(red: 0x42 / 255, green: 0x85 / 255, blue: 0xF4 / 255)
+            return Color(red: 0x42 / 255, green: 0x85 / 255, blue: 0xF4 / 255)
+        default:
+            return Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
         }
+    }
+
+    /// Deterministic accent for a discovered Claude account: Claude's own hue
+    /// rotated by a stable hash of the id. Never random and never index-based,
+    /// so adding a third account cannot recolour the existing two.
+    private static func claudeAccountAccent(for id: ProviderID) -> Color {
+        var hasher = 5381
+        for byte in id.rawValue.utf8 {
+            hasher = (hasher &* 33) &+ Int(byte)
+        }
+        // Claude's accent sits near 20° hue; step around the wheel avoiding the
+        // green/amber/red band the gauges own (roughly 30°–150°).
+        let steps = abs(hasher) % 6
+        let hue = (0.055 + Double(steps + 1) * 0.11).truncatingRemainder(dividingBy: 1)
+        return Color(hue: hue, saturation: 0.55, brightness: 0.82)
     }
 
     /// §2.2 gauge thresholds: < 50% green, < 80% amber, else red.
@@ -125,6 +150,11 @@ enum PulseColor {
         case .critical: critical
         }
     }
+
+    /// The on-pace tick. Deliberately neutral, never threshold-colored: it marks
+    /// a position on the clock, not a state, and coloring it would compete with
+    /// the fill it is meant to be read against.
+    static let paceMarker = Color.primary.opacity(0.85)
 }
 
 /// Geometry tokens from docs/DESIGN.md §3.2 (4pt grid, concentric radii:
@@ -141,6 +171,10 @@ enum Layout {
     static let panelGap: CGFloat = 6
     static let screenMargin: CGFloat = 8
     static let progressBarHeight: CGFloat = 5
+    /// Pace tick: 2pt wide, standing 3pt proud of the bar (top and bottom) so it
+    /// reads against both the filled and unfilled halves.
+    static let paceMarkerWidth: CGFloat = 2
+    static let paceMarkerOverhang: CGFloat = 3
 }
 
 /// Type scale from docs/DESIGN.md §3.1. Every numeral is monospaced.
