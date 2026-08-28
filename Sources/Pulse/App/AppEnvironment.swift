@@ -17,6 +17,13 @@ final class AppEnvironment {
     let isDemoData = ProcessInfo.processInfo.arguments.contains("--demo-data")
 
     init() {
+        // Account discovery MUST run before SettingsStore is constructed.
+        // SettingsStore reads ProviderID.allCases in its initialiser to decide
+        // which persisted ids are still valid, so an empty registry at that
+        // moment silently discards every discovered account and rewrites
+        // UserDefaults without them.
+        ProviderRegistry.shared.register(claudeAccounts: ClaudeAccount.discover().map(\.id))
+
         let settings = SettingsStore()
         let store = UsageStore()
         let history = HistoryStore()

@@ -64,6 +64,9 @@ struct ClaudeCredentials: Sendable {
 /// briefly so a 60s poll doesn't spawn a `security` subprocess every tick.
 actor ClaudeCredentialsStore {
     private let fileURL: URL
+    /// Keychain service for this account. Each Claude profile stores its token
+    /// under its own service name, so the store cannot assume the primary's.
+    private let keychainService: String
     private let keychain: KeychainReader
     private var cached: (credentials: ClaudeCredentials, loadedAt: Date)?
     /// Negative cache: a denied/timed-out keychain read must not re-prompt on
@@ -72,9 +75,11 @@ actor ClaudeCredentialsStore {
 
     init(
         fileURL: URL = AppPaths.home.appendingPathComponent(".claude/.credentials.json"),
+        keychainService: String = ClaudeCredentials.keychainService,
         keychain: KeychainReader = KeychainReader()
     ) {
         self.fileURL = fileURL
+        self.keychainService = keychainService
         self.keychain = keychain
     }
 
@@ -115,7 +120,7 @@ actor ClaudeCredentialsStore {
             return try ClaudeCredentials.parse(json: data)
         }
         do {
-            let secret = try await keychain.readGenericPassword(service: ClaudeCredentials.keychainService)
+            let secret = try await keychain.readGenericPassword(service: keychainService)
             return try ClaudeCredentials.parse(json: Data(secret.utf8))
         } catch KeychainReader.Failure.itemNotFound {
             throw ProviderFetchError.notLoggedIn(hint: "Sign in to Claude Code to start tracking.")
@@ -138,7 +143,7 @@ actor ClaudeCredentialsStore {
     func sourceExists() async -> Bool {
         if hasFreshCache { return true }
         if FileManager.default.fileExists(atPath: fileURL.path) { return true }
-        return await Self.keychainItemExists(service: ClaudeCredentials.keychainService)
+        return await Self.keychainItemExists(service: keychainService)
     }
 
     /// Runs `security find-generic-password -s <service>` (NO `-w`).

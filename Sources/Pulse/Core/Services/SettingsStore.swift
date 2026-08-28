@@ -88,15 +88,21 @@ final class SettingsStore {
         let storedInterval = defaults.double(forKey: Key.refreshInterval)
         refreshInterval = storedInterval >= 30 ? storedInterval : 60
 
+        // A ProviderID is now a struct, so `init(rawValue:)` never fails and
+        // `compactMap` no longer filters anything. Unknown ids must be
+        // rejected explicitly against the live registry, or a provider that
+        // was removed (or an account whose directory is gone) is resurrected
+        // from UserDefaults on every launch.
+        let known = Set(ProviderID.allCases)
         if let raw = defaults.stringArray(forKey: Key.enabledProviders) {
-            let ids = raw.compactMap(ProviderID.init(rawValue:))
+            let ids = Set(raw.map(ProviderID.init(rawValue:)).filter(known.contains))
             enabledProviders = ProviderID.allCases.filter(ids.contains)
         } else {
             enabledProviders = ProviderID.allCases
         }
 
         if let raw = defaults.stringArray(forKey: Key.menuBarProviders) {
-            menuBarProviders = Set(raw.compactMap(ProviderID.init(rawValue:)))
+            menuBarProviders = Set(raw.map(ProviderID.init(rawValue:)).filter(known.contains))
         } else {
             menuBarProviders = Set(ProviderID.allCases)
         }
@@ -122,21 +128,31 @@ final class SettingsStore {
         // Providers introduced by an app update default to enabled+visible even
         // when older persisted selections predate them (e.g. Copilot arriving
         // after the user already toggled providers).
-        let known = Set(
+        //
+        // Discovered Claude accounts are the exception and default to **off**.
+        // A shipped provider arriving is our decision and the user can see why;
+        // an account appearing because a directory showed up in their home
+        // folder is not, and silently claiming menu bar width for it is a
+        // surprise. They opt in from Settings > Claude Accounts.
+        let previouslyKnown = Set(
             (defaults.stringArray(forKey: Key.knownProviders) ?? [])
-                .compactMap(ProviderID.init(rawValue:))
+                .map(ProviderID.init(rawValue:))
         )
-        if !known.isEmpty {
-            let introduced = ProviderID.allCases.filter { !known.contains($0) }
-            if !introduced.isEmpty {
-                let enabled = Set(enabledProviders).union(introduced)
+        if !previouslyKnown.isEmpty {
+            let introduced = ProviderID.allCases.filter { !previouslyKnown.contains($0) }
+            let autoEnabled = introduced.filter { !$0.isClaudeAccount || $0 == .claude }
+            if !autoEnabled.isEmpty {
+                let enabled = Set(enabledProviders).union(autoEnabled)
                 enabledProviders = ProviderID.allCases.filter(enabled.contains)
-                menuBarProviders.formUnion(introduced)
-                defaults.set(enabledProviders.map(\.rawValue), forKey: Key.enabledProviders)
-                defaults.set(menuBarProviders.map(\.rawValue).sorted(), forKey: Key.menuBarProviders)
+                menuBarProviders.formUnion(autoEnabled)
             }
         }
         defaults.set(ProviderID.allCases.map(\.rawValue), forKey: Key.knownProviders)
+        // Ids no longer in the registry are dropped above on read, but nothing
+        // rewrites the stored array, so a stale id would survive every launch
+        // and reappear the moment its directory did.
+        defaults.set(enabledProviders.map(\.rawValue), forKey: Key.enabledProviders)
+        defaults.set(menuBarProviders.map(\.rawValue).sorted(), forKey: Key.menuBarProviders)
     }
 
     /// Providers actually shown in the bar: enabled ∩ menuBarProviders, canonical order.

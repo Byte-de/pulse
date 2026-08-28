@@ -22,13 +22,23 @@ final class BreakdownViewModel {
     /// Demo/screenshot mode expands the top project once so the drill-down shows.
     private var didApplyDemoExpansion = false
 
-    /// Breakdown-capable providers, in canonical order (Claude, Codex).
-    let supportedProviders: [ProviderID]
+    /// Breakdown-capable providers the user actually enabled, in canonical
+    /// order. Capability alone is not enough: every discovered Claude account
+    /// can produce a breakdown, so filtering only on that shows tabs for
+    /// accounts the user deliberately switched off in Settings.
+    ///
+    /// Computed rather than stored because the view model outlives the window:
+    /// it is built once at launch, so a stored list would keep showing a tab
+    /// for a provider disabled since.
+    var supportedProviders: [ProviderID] {
+        let enabled = Set(environment.settings.enabledProviders)
+        return environment.projectUsage.supportedProviderIDs.filter(enabled.contains)
+    }
 
     init(environment: AppEnvironment) {
         self.environment = environment
-        let supported = environment.projectUsage.supportedProviderIDs
-        self.supportedProviders = supported
+        let enabled = Set(environment.settings.enabledProviders)
+        let supported = environment.projectUsage.supportedProviderIDs.filter(enabled.contains)
         let preferred = environment.settings.breakdownProvider
         self.selectedProvider = supported.contains(preferred) ? preferred : (supported.first ?? .claude)
         self.timeframe = environment.settings.breakdownTimeframe
