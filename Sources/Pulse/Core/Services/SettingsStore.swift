@@ -13,6 +13,61 @@ final class SettingsStore {
         case icon
     }
 
+    /// How the panel arranges enabled providers.
+    enum PanelLayout: String, CaseIterable, Sendable {
+        /// One provider at a time behind a segmented tab bar.
+        case tabs
+        /// Every enabled provider side by side, one column each, no tab bar.
+        case columns
+
+        var title: String {
+            switch self {
+            case .tabs: "One at a time (tabs)"
+            case .columns: "All side by side"
+            }
+        }
+    }
+
+    /// Which direction a limit gauge reads.
+    enum GaugeDirection: String, CaseIterable, Sendable {
+        /// Consumption: bar fills left to right as usage climbs, percentage is
+        /// the amount used (0 -> 100). The conventional progress-bar reading.
+        case used
+        /// Remaining: bar drains right to left, percentage is what is left
+        /// (100 -> 0). Reads as a fuel gauge, and lines up with the on-pace
+        /// tick, which also marks time *remaining*.
+        case remaining
+
+        var title: String {
+            switch self {
+            case .used: "Used (0 to 100%)"
+            case .remaining: "Remaining (100 to 0%)"
+            }
+        }
+
+        /// The number to display for a raw utilization.
+        func displayValue(utilization: Double) -> Double {
+            switch self {
+            case .used: utilization
+            case .remaining: max(0, 100 - utilization)
+            }
+        }
+
+        /// Fraction of the bar to fill, 0...1.
+        func fillFraction(utilization: Double) -> Double {
+            let used = min(max(utilization / 100, 0), 1)
+            return self == .used ? used : 1 - used
+        }
+
+        /// Where the on-pace tick sits, 0...1, given the elapsed fraction of
+        /// the window. It tracks the fill so the two are comparable: under
+        /// `.used` both grow rightward, under `.remaining` both drain leftward.
+        func markerPosition(elapsedFraction: Double) -> Double {
+            let elapsed = min(max(elapsedFraction, 0), 1)
+            return self == .used ? elapsed : 1 - elapsed
+        }
+    }
+
     private enum Key {
         static let refreshInterval = "refreshInterval"
         static let enabledProviders = "enabledProviders"
@@ -25,6 +80,9 @@ final class SettingsStore {
         static let breakdownTimeframe = "breakdownTimeframe"
         static let breakdownSort = "breakdownSort"
         static let useSessionTitles = "useSessionTitles"
+        static let gaugeDirection = "gaugeDirection"
+        static let showPaceMarker = "showPaceMarker"
+        static let panelLayout = "panelLayout"
     }
 
     private let defaults: UserDefaults
@@ -46,6 +104,29 @@ final class SettingsStore {
 
     var menuBarStyle: MenuBarStyle {
         didSet { defaults.set(menuBarStyle.rawValue, forKey: Key.menuBarStyle) }
+    }
+
+    /// Whether limit gauges show what is used or what is left. Applies to the
+    /// bar, the headline percentage and the pace tick together: a bar and a
+    /// number that disagreed about direction would be worse than either
+    /// convention on its own.
+    var gaugeDirection: GaugeDirection {
+        didSet { defaults.set(gaugeDirection.rawValue, forKey: Key.gaugeDirection) }
+    }
+
+    /// Whether limit gauges draw the on-pace tick: the mark showing where the
+    /// window clock sits, so the bar can be read against elapsed time rather
+    /// than in isolation. Off gives a plain bar, and the row shrinks by the
+    /// marker's overhang rather than leaving a gap where it was.
+    var showPaceMarker: Bool {
+        didSet { defaults.set(showPaceMarker, forKey: Key.showPaceMarker) }
+    }
+
+    /// Whether the panel stacks providers behind tabs or shows every enabled
+    /// provider as its own column. Columns widen the panel by one column per
+    /// provider, so the controller derives the window width from this.
+    var panelLayout: PanelLayout {
+        didSet { defaults.set(panelLayout.rawValue, forKey: Key.panelLayout) }
     }
 
     /// Last selected provider tab, restored when the panel reopens.
@@ -88,21 +169,41 @@ final class SettingsStore {
         let storedInterval = defaults.double(forKey: Key.refreshInterval)
         refreshInterval = storedInterval >= 30 ? storedInterval : 60
 
+        // A ProviderID is now a struct, so `init(rawValue:)` never fails and
+        // `compactMap` no longer filters anything. Unknown ids must be
+        // rejected explicitly against the live registry, or a provider that
+        // was removed (or an account whose directory is gone) is resurrected
+        // from UserDefaults on every launch.
+        let known = Set(ProviderID.allCases)
         if let raw = defaults.stringArray(forKey: Key.enabledProviders) {
-            let ids = raw.compactMap(ProviderID.init(rawValue:))
+            let ids = Set(raw.map(ProviderID.init(rawValue:)).filter(known.contains))
             enabledProviders = ProviderID.allCases.filter(ids.contains)
         } else {
             enabledProviders = ProviderID.allCases
         }
 
         if let raw = defaults.stringArray(forKey: Key.menuBarProviders) {
-            menuBarProviders = Set(raw.compactMap(ProviderID.init(rawValue:)))
+            menuBarProviders = Set(raw.map(ProviderID.init(rawValue:)).filter(known.contains))
         } else {
             menuBarProviders = Set(ProviderID.allCases)
         }
 
         menuBarStyle = defaults.string(forKey: Key.menuBarStyle)
             .flatMap(MenuBarStyle.init(rawValue:)) ?? .stats
+
+        gaugeDirection = defaults.string(forKey: Key.gaugeDirection)
+            .flatMap(GaugeDirection.init(rawValue:)) ?? .remaining
+
+        // Default on: the tick is the only thing that turns a percentage into
+        // "am I ahead or behind". `object(forKey:)` rather than `bool(forKey:)`
+        // because the latter returns false for an absent key, which would
+        // silently ship the feature disabled.
+        showPaceMarker = (defaults.object(forKey: Key.showPaceMarker) as? Bool) ?? true
+
+        // Default columns: with two or three providers enabled, one click
+        // showing all of them beats three clicks showing one each.
+        panelLayout = defaults.string(forKey: Key.panelLayout)
+            .flatMap(PanelLayout.init(rawValue:)) ?? .columns
 
         selectedTab = defaults.string(forKey: Key.selectedTab)
             .flatMap(ProviderID.init(rawValue:)) ?? .claude
@@ -122,21 +223,31 @@ final class SettingsStore {
         // Providers introduced by an app update default to enabled+visible even
         // when older persisted selections predate them (e.g. Copilot arriving
         // after the user already toggled providers).
-        let known = Set(
+        //
+        // Discovered Claude accounts are the exception and default to **off**.
+        // A shipped provider arriving is our decision and the user can see why;
+        // an account appearing because a directory showed up in their home
+        // folder is not, and silently claiming menu bar width for it is a
+        // surprise. They opt in from Settings > Claude Accounts.
+        let previouslyKnown = Set(
             (defaults.stringArray(forKey: Key.knownProviders) ?? [])
-                .compactMap(ProviderID.init(rawValue:))
+                .map(ProviderID.init(rawValue:))
         )
-        if !known.isEmpty {
-            let introduced = ProviderID.allCases.filter { !known.contains($0) }
-            if !introduced.isEmpty {
-                let enabled = Set(enabledProviders).union(introduced)
+        if !previouslyKnown.isEmpty {
+            let introduced = ProviderID.allCases.filter { !previouslyKnown.contains($0) }
+            let autoEnabled = introduced.filter { !$0.isClaudeAccount || $0 == .claude }
+            if !autoEnabled.isEmpty {
+                let enabled = Set(enabledProviders).union(autoEnabled)
                 enabledProviders = ProviderID.allCases.filter(enabled.contains)
-                menuBarProviders.formUnion(introduced)
-                defaults.set(enabledProviders.map(\.rawValue), forKey: Key.enabledProviders)
-                defaults.set(menuBarProviders.map(\.rawValue).sorted(), forKey: Key.menuBarProviders)
+                menuBarProviders.formUnion(autoEnabled)
             }
         }
         defaults.set(ProviderID.allCases.map(\.rawValue), forKey: Key.knownProviders)
+        // Ids no longer in the registry are dropped above on read, but nothing
+        // rewrites the stored array, so a stale id would survive every launch
+        // and reappear the moment its directory did.
+        defaults.set(enabledProviders.map(\.rawValue), forKey: Key.enabledProviders)
+        defaults.set(menuBarProviders.map(\.rawValue).sorted(), forKey: Key.menuBarProviders)
     }
 
     /// Providers actually shown in the bar: enabled ∩ menuBarProviders, canonical order.

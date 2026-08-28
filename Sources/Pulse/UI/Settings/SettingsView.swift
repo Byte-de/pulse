@@ -32,6 +32,55 @@ struct SettingsView: View {
                     Text("2 minutes").tag(TimeInterval(120))
                     Text("5 minutes").tag(TimeInterval(300))
                 }
+
+                Picker("Limit gauges show", selection: $settings.gaugeDirection) {
+                    ForEach(SettingsStore.GaugeDirection.allCases, id: \.self) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                Text(settings.gaugeDirection == .used
+                    ? "Bars fill left to right as you spend."
+                    : "Bars drain right to left like a fuel gauge.")
+                    .font(Typo.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle(isOn: $settings.showPaceMarker) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Show pace marker")
+                        Text("A tick on each gauge marking how far through the window you are, so the bar can be read against the clock: ahead of it means you are burning the limit faster than it refills.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section {
+                ForEach(ProviderID.allCases) { id in
+                    providerRow(id, subtitle: claudeAccountSubtitle(id))
+                }
+            } header: {
+                Text("Providers")
+            } footer: {
+                if !discoveredClaudeAccounts.isEmpty {
+                    Text("Extra Claude accounts are found by scanning your home folder for `.claude-*` directories, and start switched off. Create one with `CLAUDE_CONFIG_DIR=~/.claude-work claude`, then restart Pulse.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Panel") {
+                Picker("Providers", selection: $settings.panelLayout) {
+                    ForEach(SettingsStore.PanelLayout.allCases, id: \.self) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                Text(settings.panelLayout == .columns
+                    ? "One click shows every enabled provider at once, side by side. The panel widens by one column per provider, capped at what the screen holds."
+                    : "One provider at a time, switched with the tab bar (⌘1…⌘4, arrow keys).")
+                    .font(Typo.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Menu Bar") {
@@ -49,12 +98,6 @@ struct SettingsView: View {
                         )
                         .disabled(!settings.enabledProviders.contains(id))
                     }
-                }
-            }
-
-            Section("Providers") {
-                ForEach(ProviderID.allCases) { id in
-                    providerRow(id)
                 }
             }
 
@@ -88,7 +131,7 @@ struct SettingsView: View {
         .frame(width: 420)
     }
 
-    private func providerRow(_ id: ProviderID) -> some View {
+    private func providerRow(_ id: ProviderID, subtitle: String? = nil) -> some View {
         let descriptor = environment.descriptor(for: id)
         let record = store.record(for: id)
 
@@ -98,13 +141,29 @@ struct SettingsView: View {
                     Circle().fill(PulseColor.accent(id)).frame(width: 7, height: 7)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(descriptor.name)
-                        Text(statusLine(record: record, descriptor: descriptor))
+                        Text(subtitle ?? statusLine(record: record, descriptor: descriptor))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
                 }
             }
         }
+    }
+
+    /// Secondary Claude accounts, i.e. everything discovered under `~/.claude-*`.
+    private var discoveredClaudeAccounts: [ProviderID] {
+        ProviderID.allCases.filter { $0.isClaudeAccount && $0 != .claude }
+    }
+
+    /// For a discovered account, lead with the directory it reads: with several
+    /// "Claude Something" rows, the config dir is the only thing that tells
+    /// them apart. nil for built-ins, which keep their normal status line.
+    private func claudeAccountSubtitle(_ id: ProviderID) -> String? {
+        guard id.isClaudeAccount, id != .claude else { return nil }
+        let record = store.record(for: id)
+        let descriptor = environment.descriptor(for: id)
+        let suffix = id.rawValue.dropFirst(ProviderID.claudeAccountPrefix.count)
+        return "~/.claude-\(suffix) · \(statusLine(record: record, descriptor: descriptor))"
     }
 
     private func statusLine(record: ProviderRecord, descriptor: ProviderDescriptor) -> String {
