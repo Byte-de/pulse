@@ -38,7 +38,7 @@ failures degrade to a stale badge instead of blanking the panel.
 
 | Provider | Limits source | Tokens/cost source | Auth |
 |---|---|---|---|
-| Claude | `api.anthropic.com/api/oauth/usage` (flat windows + structured `limits` array; Fable only in the latter) | `~/.claude/projects/**/*.jsonl` + pricing table | Keychain "Claude Code-credentials" via `/usr/bin/security` (stable ACL grant), file fallback |
+| Claude | `api.anthropic.com/api/oauth/usage` (flat windows + structured `limits` array; Fable only in the latter) | `~/.claude/projects/**/*.jsonl`, plus the harnesses billing the same account — `~/.jcode/sessions/session_*.json` and `~/.pi/agent/sessions/**/*.jsonl` — + pricing table | Keychain "Claude Code-credentials" via `/usr/bin/security` (stable ACL grant), file fallback |
 | Codex | `chatgpt.com/backend-api/wham/usage` (fallback: newest session JSONL `rate_limits`) | `~/.codex/sessions/**` cumulative `token_count` deltas | `~/.codex/auth.json` |
 | Cursor | `cursor.com` usage + dashboard APIs | `get-aggregated-usage-events` / `get-filtered-usage-events` | JWT from `state.vscdb` (read-only, immutable mode) → `WorkosCursorSessionToken` cookie |
 | Gemini | `cloudcode-pa.googleapis.com` `loadCodeAssist` + `retrieveUserQuota` | n/a (quota-only tab) | `~/.gemini/oauth_creds.json`, in-memory refresh only |
@@ -47,6 +47,42 @@ Ground truth for every endpoint/schema: `docs/RESEARCH/*.md` (local
 engineering notes, not committed — they contain machine-specific details;
 verified against
 this machine and the gemini-cli/CodexBar/ccusage sources).
+
+**Harnesses are not providers.** jcode and pi run against the *same* Anthropic
+accounts Claude Code uses, so their tokens are folded into that account's tab
+rather than given one of their own. **Attribution is by account identity, never
+by a name that can be renamed or reordered** — twice now a naming assumption has
+silently moved real money to the wrong tab. jcode's accounts are matched by
+*email* (`~/.jcode/auth.json`) against `<configDir>/.claude.json`, and each
+account answers to a **set** of labels: its current one *and* the legacy
+`claude-N`, because jcode renamed its accounts to `claude-otter`/`claude-fox`
+while its session writer kept stamping `claude-1`/`claude-2` (2026-09-01, files
+written in the same hour). Matching one label zeroed the Claude tab with no
+error anywhere. Both harnesses name accounts positionally (jcode
+`claude-1`, `claude-2`; pi `anthropic`, `anthropic-2` in `~/.pi/agent/auth.json`)
+but pi records no identity at all: only the key on each message. Ordinal
+mapping (`anthropic-N` → the Nth account) was tried and was **backwards** on the
+first machine it met — 153.4M tokens on the wrong tab, with nothing about the
+numbers looking wrong. `PiAccountResolver` therefore resolves each pi key
+against `api.anthropic.com/api/oauth/profile`, whose `account.uuid` is the same
+id Claude Code writes into `<configDir>/.claude.json`; the answer is cached
+per token fingerprint, so it costs one request per key per sign-in. A key that
+cannot be resolved (offline, expired token, signed out) contributes to **no**
+tab: dropped usage is visible and recoverable, misattributed usage is neither.
+Two config dirs holding the same account (this machine has `~/.claude` and
+`~/.claude-joeld`, both joel@) would otherwise both claim the same harness
+sessions, so only the first keeps the claim. pi has no sub-agents (no session-level parent;
+a record's `parentId` is the conversation DAG), so the token card's sub-agent
+rows are gated per window and stay hidden for a pi-only account.
+
+Each of the three writers is separately switchable (Settings > Count Tokens
+From). The switches are held in `UsageSourceGate`, a small Sendable holder
+`SettingsStore` pushes to and the provider actors read once per refresh —
+providers are created at launch, so a constructor parameter (as `captureTitles`
+is) would need a restart, and a switch whose point is to watch the total move
+cannot need one. Token card, daily chart and breakdown are gated together;
+limits and quotas never are, so Codex still takes its fallback rate-limit
+window from the newest session file with "provider sessions" off.
 
 Heavy log parsing is incremental: `FileAggregationCache` persists one aggregate
 per file keyed by (size, mtime), so only changed files are re-parsed per tick.

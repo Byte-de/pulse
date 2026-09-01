@@ -13,6 +13,18 @@ final class RefreshScheduler {
 
     private var loops: [ProviderID: Task<Void, Never>] = [:]
     private var backoffMultiplier: [ProviderID: Double] = [:]
+    /// Earliest time a provider may be called again, set from a 429's
+    /// `Retry-After`. Exponential backoff alone cannot honour it: the loop caps
+    /// at 600 s and Anthropic's usage endpoint asks for 2808 s, so without a
+    /// hard floor the app calls back inside the penalty window and renews it.
+    private var cooldownUntil: [ProviderID: Date] = [:]
+
+    /// Whether a provider is inside a provider-imposed cooldown right now.
+    /// Exposed for the panel's refresh affordance and for verification.
+    func cooldownRemaining(_ id: ProviderID, now: Date = .now) -> TimeInterval? {
+        guard let until = cooldownUntil[id], until > now else { return nil }
+        return until.timeIntervalSince(now)
+    }
 
     init(providers: [any UsageProvider], store: UsageStore, history: HistoryStore, settings: SettingsStore) {
         self.providers = providers
@@ -52,6 +64,11 @@ final class RefreshScheduler {
             guard now.timeIntervalSince(last) >= age else { continue }
             Task { await self.refresh(provider) }
         }
+        // NOTE: the cooldown is enforced inside `refresh`, not here, so EVERY
+        // caller is covered - the loop, this method, the wake observer and the
+        // panel's manual ⌘R alike. A guard placed only in the loop is the
+        // obvious version of this fix and it leaks: opening the panel calls
+        // `refreshAll(ifOlderThan: 20)`, which would walk straight past it.
     }
 
     private func makeLoop(for provider: any UsageProvider) -> Task<Void, Never> {
@@ -63,7 +80,11 @@ final class RefreshScheduler {
                 let base = self.settings.refreshInterval
                 let multiplier = self.backoffMultiplier[provider.id] ?? 1
                 let jitter = Double.random(in: 0...3)
-                let interval = min(base * multiplier, 600) + jitter
+                // Sleep past the cooldown rather than waking every interval to
+                // be turned away: the guard in `refresh` is what makes this
+                // safe, this only stops 47 pointless wake-ups.
+                let cooldown = self.cooldownRemaining(provider.id) ?? 0
+                let interval = max(min(base * multiplier, 600), cooldown) + jitter
                 try? await Task.sleep(for: .seconds(interval))
             }
         }
@@ -72,6 +93,8 @@ final class RefreshScheduler {
     private func refresh(_ provider: any UsageProvider) async {
         let id = provider.id
         guard !store.record(for: id).isRefreshing else { return }
+        // Inside a provider-imposed cooldown, the most useful request is none.
+        guard cooldownRemaining(id) == nil else { return }
         store.setRefreshing(id, true)
 
         switch await provider.probeConnection() {
@@ -90,7 +113,16 @@ final class RefreshScheduler {
                 return
             }
             store.apply(snapshot)
-            backoffMultiplier[id] = 1
+            // A snapshot whose limits half failed is NOT a clean success. It
+            // used to reset the backoff here, which is what let a 429'd
+            // provider be called every 60 s forever: the token history kept
+            // succeeding, so the failure never reached this code.
+            if let limitsError = snapshot.limitsError, limitsError.isTransient {
+                applyBackoff(id, error: limitsError)
+            } else {
+                backoffMultiplier[id] = 1
+                cooldownUntil[id] = nil
+            }
             await recordAndDerive(snapshot)
         } catch is CancellationError {
             // Settings toggled the provider off mid-fetch — not an error.
@@ -102,10 +134,24 @@ final class RefreshScheduler {
             }
             store.applyError(id, error)
             if error.isTransient {
-                backoffMultiplier[id] = min((backoffMultiplier[id] ?? 1) * 2, 8)
+                applyBackoff(id, error: error)
             }
         } catch {
             store.applyError(id, .parsing(description: error.localizedDescription))
+        }
+    }
+
+    /// Doubles the loop's interval and, when the provider named a wait, holds a
+    /// hard cooldown for at least that long.
+    private func applyBackoff(_ id: ProviderID, error: ProviderFetchError) {
+        backoffMultiplier[id] = min((backoffMultiplier[id] ?? 1) * 2, 8)
+        guard let retryAfter = error.retryAfter else { return }
+        // 5% padding: coming back on the exact second the provider named is a
+        // coin flip against its own clock, and losing that flip costs another
+        // full penalty window.
+        let until = Date(timeIntervalSinceNow: retryAfter * 1.05)
+        if until > (cooldownUntil[id] ?? .distantPast) {
+            cooldownUntil[id] = until
         }
     }
 

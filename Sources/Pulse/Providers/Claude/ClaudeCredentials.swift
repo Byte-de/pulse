@@ -60,11 +60,22 @@ struct ClaudeCredentials: Sendable {
     }
 }
 
-/// Loads credentials (file first — promptless — then Keychain) and caches them
-/// briefly so a 60s poll doesn't spawn a `security` subprocess every tick.
+/// Loads credentials (file first — promptless — then Keychain).
+///
+/// Caching policy: **the token itself is never cached across a refresh**. The
+/// file read is a plain `Data(contentsOf:)`, so re-reading it every tick costs
+/// nothing and always sees the token Claude Code just rotated. Only a
+/// Keychain-sourced token is held briefly, because each `-w` read spawns a
+/// `security` subprocess that can raise an ACL dialog — and even that copy is
+/// dropped the moment `expiresAt` passes, so Pulse never sends a token it can
+/// already tell is dead.
 actor ClaudeCredentialsStore {
     private let fileURL: URL
+    /// Keychain service for this account. Defaults to the primary profile's.
+    private let keychainService: String
     private let keychain: KeychainReader
+    /// Keychain-sourced credentials only; a file-sourced token is re-read
+    /// every time.
     private var cached: (credentials: ClaudeCredentials, loadedAt: Date)?
     /// Negative cache: a denied/timed-out keychain read must not re-prompt on
     /// every 60s tick (each `-w` read can spawn a fresh ACL dialog).
@@ -72,26 +83,31 @@ actor ClaudeCredentialsStore {
 
     init(
         fileURL: URL = AppPaths.home.appendingPathComponent(".claude/.credentials.json"),
+        keychainService: String = ClaudeCredentials.keychainService,
         keychain: KeychainReader = KeychainReader()
     ) {
         self.fileURL = fileURL
+        self.keychainService = keychainService
         self.keychain = keychain
     }
 
     private static let cacheTTL: TimeInterval = 300
 
     func credentials(forceReload: Bool = false) async throws -> ClaudeCredentials {
-        if !forceReload, let cached, Date.now.timeIntervalSince(cached.loadedAt) < Self.cacheTTL {
+        if !forceReload, let cached,
+           Date.now.timeIntervalSince(cached.loadedAt) < Self.cacheTTL,
+           !cached.credentials.isExpired() {
             return cached.credentials
         }
         if !forceReload, let lastFailure, Date.now.timeIntervalSince(lastFailure.at) < Self.cacheTTL {
             throw lastFailure.error
         }
         do {
-            let credentials = try await load()
-            cached = (credentials, .now)
+            let loaded = try await load()
+            // File-sourced tokens are cheap to re-read, so nothing is retained.
+            cached = loaded.fromKeychain ? (loaded.credentials, .now) : nil
             lastFailure = nil
-            return credentials
+            return loaded.credentials
         } catch let error as ProviderFetchError {
             lastFailure = (error, .now)
             throw error
@@ -110,22 +126,37 @@ actor ClaudeCredentialsStore {
         lastFailure = nil
     }
 
-    private func load() async throws -> ClaudeCredentials {
-        if let data = try? Data(contentsOf: fileURL) {
-            return try ClaudeCredentials.parse(json: data)
+    private func load() async throws -> (credentials: ClaudeCredentials, fromKeychain: Bool) {
+        // The file is only authoritative while its token is still valid. A
+        // stale `~/.claude/.credentials.json` left behind by an older install
+        // outlives the token inside it, and preferring it unconditionally
+        // makes Pulse send a long-dead token forever while the live one sits
+        // in the Keychain — 401 on every poll, then a 429 that hides the
+        // cause. An expired file therefore falls through.
+        let fileCredentials = (try? Data(contentsOf: fileURL)).flatMap {
+            try? ClaudeCredentials.parse(json: $0)
+        }
+        if let fileCredentials, !fileCredentials.isExpired() {
+            return (fileCredentials, false)
         }
         do {
-            let secret = try await keychain.readGenericPassword(service: ClaudeCredentials.keychainService)
-            return try ClaudeCredentials.parse(json: Data(secret.utf8))
+            let secret = try await keychain.readGenericPassword(service: keychainService)
+            return (try ClaudeCredentials.parse(json: Data(secret.utf8)), true)
         } catch KeychainReader.Failure.itemNotFound {
+            // No Keychain item: an expired file is still the best evidence of
+            // who is signed in, and the endpoint's 401 is the honest answer.
+            if let fileCredentials { return (fileCredentials, false) }
             throw ProviderFetchError.notLoggedIn(hint: "Sign in to Claude Code to start tracking.")
         } catch KeychainReader.Failure.accessDeniedOrTimeout {
+            if let fileCredentials { return (fileCredentials, false) }
             throw ProviderFetchError.notLoggedIn(
                 hint: "Approve Keychain access for Pulse to read Claude Code's credentials."
             )
         } catch let error as ProviderFetchError {
+            if let fileCredentials { return (fileCredentials, false) }
             throw error
         } catch {
+            if let fileCredentials { return (fileCredentials, false) }
             throw ProviderFetchError.notLoggedIn(hint: "Claude Code credentials unavailable.")
         }
     }
@@ -138,7 +169,7 @@ actor ClaudeCredentialsStore {
     func sourceExists() async -> Bool {
         if hasFreshCache { return true }
         if FileManager.default.fileExists(atPath: fileURL.path) { return true }
-        return await Self.keychainItemExists(service: ClaudeCredentials.keychainService)
+        return await Self.keychainItemExists(service: keychainService)
     }
 
     /// Runs `security find-generic-password -s <service>` (NO `-w`).

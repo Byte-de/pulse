@@ -35,3 +35,18 @@ jobs:
 
       - name: Test
         run: swift test
+
+      # Source-level guards for defects that compile and pass tests: a UI
+      # surface bypassing the gauge-direction setting, a Spacer that stops the
+      # panel shrinking, a per-tick animation that redraws at display rate.
+      - name: Guards
+        run: |
+          python3 scripts/check-gauge-direction.py
+          python3 scripts/check-panel-height.py
+          python3 scripts/check-timeline-animation.py
+
+      # Planted-defect verifier for 429 / Retry-After handling. Gated here
+      # because the failure it guards is silent: the app keeps working, keeps
+      # showing carried-forward numbers, and keeps renewing its own rate limit.
+      - name: Rate-limit backoff verifier
+        run: bash scripts/verify-rate-limit-backoff.sh

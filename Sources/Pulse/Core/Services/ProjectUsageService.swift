@@ -39,9 +39,10 @@ actor ProjectUsageService {
     func breakdown(
         for id: ProviderID,
         timeframe: BreakdownTimeframe,
+        sources: UsageSourceSelection = .all,
         now: Date = .now
     ) async -> ProjectBreakdown? {
         guard let provider = providers[id] else { return nil }
-        return await provider.projectBreakdown(timeframe: timeframe, now: now)
+        return await provider.projectBreakdown(timeframe: timeframe, sources: sources, now: now)
     }
 }

@@ -8,6 +8,10 @@ final class PanelState {
     var isPresented = false
     /// Height budget for the whole panel (screen-derived, set by the controller).
     var maxPanelHeight: CGFloat = 700
+    /// Width budget for the whole panel (screen-derived, set by the controller).
+    /// Columns layout can ask for more than a screen holds; the controller
+    /// clamps and the view drops columns to fit rather than overflowing.
+    var maxPanelWidth: CGFloat = 1400
 }
 
 /// Everything inside the glass: tab bar, card stack, footer, bottom bar.
@@ -17,6 +21,7 @@ struct PanelRootView: View {
     let environment: AppEnvironment
     let state: PanelState
     let onHeightChange: (CGFloat) -> Void
+    let onWidthChange: (CGFloat) -> Void
     let onClose: () -> Void
     let onOpenSettings: () -> Void
     let onOpenBreakdown: () -> Void
@@ -31,6 +36,44 @@ struct PanelRootView: View {
         settings.enabledProviders.isEmpty ? ProviderID.allCases : settings.enabledProviders
     }
 
+    /// Width of one provider column: the same content width a single tab gets,
+    /// so cards render identically in both layouts.
+    private var columnWidth: CGFloat { Layout.panelWidth - 2 * Layout.panelPadding }
+
+    /// Providers actually drawn side by side, clamped to what the screen can
+    /// hold at one full-width column each.
+    private var columns: [ProviderID] {
+        let usable = state.maxPanelWidth - 2 * Layout.panelPadding - systemWidth + Layout.cardGap
+        let fits = max(Int(usable / (columnWidth + Layout.cardGap)), 1)
+        return Array(tabs.prefix(fits))
+    }
+
+    private var isColumns: Bool { settings.panelLayout == .columns && tabs.count > 1 }
+
+    /// Simple view: one ring + weekly bar per provider, CPU and memory for the
+    /// machine, nothing else. Independent of `panelLayout` - it is always
+    /// side by side, because three cards this short have nothing to gain from
+    /// a tab bar hiding two of them.
+    private var isSimple: Bool { settings.panelMode == .simple }
+
+    /// Providers drawn in the simple view, clamped to what the screen holds.
+    private var glanceColumns: [ProviderID] {
+        let usable = state.maxPanelWidth - 2 * Layout.panelPadding - systemWidth + Layout.cardGap
+        let fits = max(Int(usable / (Layout.glanceColumnWidth + Layout.cardGap)), 1)
+        return Array(tabs.prefix(fits))
+    }
+
+    /// Whether the machine-stats sidebar is drawn. It sits left of the
+    /// providers in both layouts - with a single provider tab that means left
+    /// of that one tab, which is exactly the arrangement that makes it useful
+    /// while an agent is running.
+    private var showsSystem: Bool { settings.showSystemStats }
+
+    /// Horizontal budget the sidebar takes out of the panel, gap included.
+    private var systemWidth: CGFloat {
+        showsSystem ? Layout.systemColumnWidth + Layout.cardGap : 0
+    }
+
     private var selection: ProviderID {
         tabs.contains(settings.selectedTab) ? settings.selectedTab : tabs[0]
     }
@@ -41,16 +84,32 @@ struct PanelRootView: View {
         ZStack(alignment: .top) {
             if state.isPresented {
                 content
-                    .frame(width: Layout.panelWidth)
+                    .frame(width: contentWidth)
                     .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
                         onHeightChange(height)
+                    }
+                    .onGeometryChange(for: CGFloat.self, of: \.size.width) { width in
+                        onWidthChange(width)
                     }
                     .background(keyboardShortcuts)
                     .transition(panelTransition)
             } else {
-                Color.clear.frame(width: Layout.panelWidth, height: 1)
+                Color.clear.frame(width: contentWidth, height: 1)
             }
         }
+    }
+
+    /// Panel width: the optional stats sidebar, plus one column, or N columns
+    /// and the gaps between them.
+    private var contentWidth: CGFloat {
+        if isSimple {
+            let count = CGFloat(glanceColumns.count)
+            return count * Layout.glanceColumnWidth + (count - 1) * Layout.cardGap
+                + 2 * Layout.panelPadding + systemWidth
+        }
+        guard isColumns else { return Layout.panelWidth + systemWidth }
+        let count = CGFloat(columns.count)
+        return count * columnWidth + (count - 1) * Layout.cardGap + 2 * Layout.panelPadding + systemWidth
     }
 
     /// Origin-aware enter/exit: grows out of the status item (scale anchored
@@ -64,16 +123,40 @@ struct PanelRootView: View {
 
     private var content: some View {
         VStack(spacing: Layout.cardGap) {
-            ProviderTabBar(
-                providers: tabs,
-                names: { environment.descriptor(for: $0).name },
-                selection: Binding(
-                    get: { selection },
-                    set: { select($0, keyboard: false) }
-                )
-            )
+            HStack(alignment: .top, spacing: Layout.cardGap) {
+                if showsSystem {
+                    SystemColumn(
+                        monitor: environment.system,
+                        showProcesses: settings.showSystemProcesses,
+                        isCompact: isSimple
+                    )
+                }
 
-            cardArea
+                if isSimple {
+                    glanceArea
+                } else if isColumns {
+                    columnArea
+                } else {
+                    VStack(spacing: Layout.cardGap) {
+                        ProviderTabBar(
+                            providers: tabs,
+                            names: { environment.descriptor(for: $0).name },
+                            selection: Binding(
+                                get: { selection },
+                                set: { select($0, keyboard: false) }
+                            )
+                        )
+
+                        cardArea
+                        // No trailing Spacer: this VStack's height is measured
+                        // and becomes the window height, and a Spacer expands
+                        // to the proposed (window) height, pinning the panel at
+                        // whatever size it once reached. Same defect as the one
+                        // documented in SystemColumn.
+                    }
+                    .frame(width: columnWidth)
+                }
+            }
 
             PanelFooter(store: store) {
                 environment.scheduler.refreshAll()
@@ -81,10 +164,12 @@ struct PanelRootView: View {
 
             PanelBottomBar(
                 providerName: environment.descriptor(for: selection).name,
+                mode: settings.panelMode,
                 openProvider: {
                     environment.openProvider(selection)
                     onClose()
                 },
+                toggleMode: toggleMode,
                 openBreakdown: onOpenBreakdown,
                 openSettings: onOpenSettings,
                 minimize: onClose,
@@ -92,6 +177,93 @@ struct PanelRootView: View {
             )
         }
         .padding(Layout.panelPadding)
+    }
+
+    /// The simple view's provider area. Deliberately NOT wrapped in a
+    /// ScrollView: the whole point is that it fits, and a scroll view here
+    /// would reintroduce the measured-height fight the columns layout has to
+    /// manage. If it ever stops fitting, that is a signal the view has grown
+    /// past its brief.
+    private var glanceArea: some View {
+        HStack(alignment: .top, spacing: Layout.cardGap) {
+            ForEach(glanceColumns) { provider in
+                VStack(spacing: Layout.cardGap) {
+                    ProviderColumnHeader(
+                        name: environment.descriptor(for: provider).name,
+                        accent: PulseColor.accent(provider),
+                        isActive: provider == selection,
+                        select: { withAnimation(Motion.tabPill) { settings.selectedTab = provider } },
+                        open: {
+                            environment.openProvider(provider)
+                            onClose()
+                        }
+                    )
+
+                    ProviderGlanceCard(
+                        descriptor: environment.descriptor(for: provider),
+                        record: store.record(for: provider),
+                        settings: settings,
+                        openSettings: onOpenSettings
+                    )
+                    // NO trailing Spacer. This tree is measured and becomes the
+                    // window height (see SystemColumn and
+                    // scripts/check-panel-height.py); HStack(alignment: .top)
+                    // already top-aligns the columns.
+                }
+                .frame(width: Layout.glanceColumnWidth)
+            }
+        }
+    }
+
+    private func toggleMode() {
+        withAnimation(Motion.tabPill) {
+            settings.panelMode = settings.panelMode == .simple ? .full : .simple
+        }
+    }
+
+    /// Side-by-side layout: every enabled provider gets its own full column,
+    /// each with the header the tab bar would otherwise carry. One shared
+    /// scroll view so the columns stay row-aligned as they grow.
+    private var columnArea: some View {
+        let chromeHeight: CGFloat = 172 // footer + bottom bar + paddings
+        let budget = max(state.maxPanelHeight - chromeHeight, 240)
+
+        return ScrollView {
+            HStack(alignment: .top, spacing: Layout.cardGap) {
+                ForEach(columns) { provider in
+                    VStack(spacing: Layout.cardGap) {
+                        ProviderColumnHeader(
+                            name: environment.descriptor(for: provider).name,
+                            accent: PulseColor.accent(provider),
+                            isActive: provider == selection,
+                            select: { withAnimation(Motion.tabPill) { settings.selectedTab = provider } },
+                            open: {
+                                environment.openProvider(provider)
+                                onClose()
+                            }
+                        )
+
+                        ProviderDetailView(
+                            descriptor: environment.descriptor(for: provider),
+                            record: store.record(for: provider),
+                            settings: settings,
+                            retry: { environment.scheduler.refreshAll() },
+                            openSettings: onOpenSettings
+                        )
+
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: columnWidth)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { height in
+                cardsHeight = height
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.never)
+        .frame(height: min(cardsHeight, budget))
+        .animation(nil, value: cardsHeight)
     }
 
     private var cardArea: some View {
@@ -157,6 +329,7 @@ struct PanelRootView: View {
             Button("") { environment.scheduler.refreshAll() }.keyboardShortcut("r", modifiers: .command)
             Button("") { onOpenSettings() }.keyboardShortcut(",", modifiers: .command)
             Button("") { onOpenBreakdown() }.keyboardShortcut("b", modifiers: .command)
+            Button("") { toggleMode() }.keyboardShortcut("e", modifiers: .command)
             Button("") { NSApp.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
             Button("") { cycleTab(1) }.keyboardShortcut(.rightArrow, modifiers: [])
             Button("") { cycleTab(-1) }.keyboardShortcut(.leftArrow, modifiers: [])

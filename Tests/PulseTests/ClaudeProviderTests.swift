@@ -96,6 +96,29 @@ struct ClaudeCredentialsTests {
         )
         #expect(!exists)
     }
+
+    /// Claude Code rotates the token in place; a cached copy would keep Pulse
+    /// sending an expired one until the TTL lapsed, which reads as an opaque
+    /// "Service error (429)" once the endpoint starts throttling the retries.
+    @Test func fileCredentialsAreRereadOnEveryLoad() async throws {
+        let url = URL.temporaryDirectory.appendingPathComponent("pulse-creds-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        func write(token: String) throws {
+            let json = #"{"claudeAiOauth":{"accessToken":"\#(token)","subscriptionType":"max"}}"#
+            try Data(json.utf8).write(to: url)
+        }
+
+        let store = ClaudeCredentialsStore(fileURL: url)
+        try write(token: "first")
+        let before = try await store.credentials()
+        #expect(before.accessToken == "first")
+
+        try write(token: "second")
+        let after = try await store.credentials()
+        #expect(after.accessToken == "second")
+        #expect(await store.hasFreshCache == false)
+    }
 }
 
 // MARK: - Usage endpoint
@@ -631,4 +654,3 @@ struct ClaudeMergeTests {
         #expect(bundle.dailyUsage.isEmpty)
     }
 }
-

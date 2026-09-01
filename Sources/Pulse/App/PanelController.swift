@@ -106,6 +106,10 @@ final class PanelController: NSObject, NSWindowDelegate {
     private let state = PanelState()
 
     private var contentHeight: CGFloat = 560
+    /// Live content width reported by SwiftUI. The columns layout makes this
+    /// provider-count dependent, so the window can no longer assume
+    /// `Layout.panelWidth`.
+    private var contentWidth: CGFloat = Layout.panelWidth
     private var monitors: [Any] = []
     private weak var statusButton: NSStatusBarButton?
     /// Where the panel hangs: captured at show-time from the CLICKED screen
@@ -120,7 +124,18 @@ final class PanelController: NSObject, NSWindowDelegate {
 
     /// `--pin-panel` keeps the panel up despite focus loss / outside clicks —
     /// used only for automated screenshot verification.
-    private let isPinnedForDebug = ProcessInfo.processInfo.arguments.contains("--pin-panel")
+    ///
+    /// It disables EVERY dismissal path at once (ESC, click-outside, focus
+    /// loss, and the status-item toggle), which to a user is indistinguishable
+    /// from the app having hung: the panel is stuck open and clicking the menu
+    /// bar icon does nothing. That has been mistaken for a bug twice, so the
+    /// flag now announces itself two ways that cannot be missed — a log line,
+    /// and the ⚑ prefix on the status item (see StatusItemController) — rather
+    /// than trusting whoever launched the app to remember they passed it.
+    private let isPinnedForDebug = PanelController.isPinnedForDebugLaunch
+
+    /// Static so the status item can read it without owning a controller.
+    static let isPinnedForDebugLaunch = ProcessInfo.processInfo.arguments.contains("--pin-panel")
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -131,6 +146,7 @@ final class PanelController: NSObject, NSWindowDelegate {
             environment: environment,
             state: state,
             onHeightChange: { [weak self] height in self?.contentHeightChanged(height) },
+            onWidthChange: { [weak self] width in self?.contentWidthChanged(width) },
             onClose: { [weak self] in self?.hide() },
             onOpenSettings: { [weak self] in
                 self?.hide()
@@ -166,6 +182,7 @@ final class PanelController: NSObject, NSWindowDelegate {
         isPresented = true
         anchor = Self.anchor(for: button)
         state.maxPanelHeight = (anchor?.screen.visibleFrame.height).map { $0 - 2 * Layout.screenMargin } ?? 700
+        state.maxPanelWidth = (anchor?.screen.visibleFrame.width).map { $0 - 2 * Layout.screenMargin } ?? 1400
 
         // Let SwiftUI report its natural height before the frame is committed.
         panel.contentView?.layoutSubtreeIfNeeded()
@@ -240,20 +257,28 @@ final class PanelController: NSObject, NSWindowDelegate {
         panel.invalidateShadow()
     }
 
+    private func contentWidthChanged(_ width: CGFloat) {
+        guard isPresented, width > 1, abs(width - contentWidth) > 0.5 else { return }
+        contentWidth = width
+        position()
+        panel.invalidateShadow()
+    }
+
     /// Top edge stays pinned under the status item; height changes grow downward.
     private func position() {
         guard let anchor else { return }
         let visible = anchor.screen.visibleFrame
 
         let height = min(contentHeight, state.maxPanelHeight)
-        var x = anchor.x - Layout.panelWidth / 2
+        let width = min(contentWidth, visible.width - 2 * Layout.screenMargin)
+        var x = anchor.x - width / 2
         x = max(visible.minX + Layout.screenMargin,
-                min(x, visible.maxX - Layout.panelWidth - Layout.screenMargin))
+                min(x, visible.maxX - width - Layout.screenMargin))
         let top = anchor.top - Layout.panelGap
         let y = max(visible.minY + Layout.screenMargin, top - height)
 
         panel.setFrame(
-            NSRect(x: x, y: y, width: Layout.panelWidth, height: min(height, top - y)),
+            NSRect(x: x, y: y, width: width, height: min(height, top - y)),
             display: true
         )
     }

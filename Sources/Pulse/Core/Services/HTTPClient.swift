@@ -60,10 +60,44 @@ struct HTTPClient: Sendable {
             return data
         case 401, 403:
             throw ProviderFetchError.unauthorized
+        case 429:
+            throw ProviderFetchError.rateLimited(retryAfter: Self.retryAfter(from: http))
         default:
             throw ProviderFetchError.http(status: http.statusCode)
         }
     }
+
+    /// `Retry-After`, in seconds from now, in either form RFC 9110 allows:
+    /// delta-seconds (`2808`) or an HTTP-date (`Wed, 01 Sep 2026 16:05:00 GMT`).
+    ///
+    /// This used to be dropped on the floor with the rest of the headers, which
+    /// is why a 429 could not be waited out: the app knew it was rate limited
+    /// and never knew for how long, so it kept asking on the ordinary refresh
+    /// tick and renewed the penalty every time.
+    static func retryAfter(from response: HTTPURLResponse) -> TimeInterval? {
+        guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
+            .trimmingCharacters(in: .whitespaces), !raw.isEmpty
+        else { return nil }
+
+        if let seconds = TimeInterval(raw) {
+            // A past or absurd value is treated as absent rather than trusted:
+            // a negative delta would disable the cooldown entirely.
+            return seconds > 0 ? min(seconds, 24 * 3600) : nil
+        }
+        guard let date = httpDateFormatter.date(from: raw) else { return nil }
+        let interval = date.timeIntervalSinceNow
+        return interval > 0 ? min(interval, 24 * 3600) : nil
+    }
+
+    /// IMF-fixdate, the only form a server must send. Locale and time zone are
+    /// pinned: the default locale would fail to parse "Wed" on a Spanish Mac.
+    private static let httpDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter
+    }()
 
     /// Decodes JSON, mapping failures to `ProviderFetchError.parsing`.
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {

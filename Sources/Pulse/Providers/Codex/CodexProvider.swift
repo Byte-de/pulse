@@ -58,9 +58,16 @@ actor CodexProvider: UsageProvider, ProjectBreakdownProviding {
         var snapshot = UsageSnapshot(providerID: .codex, fetchedAt: now)
         snapshot.plan = auth.plan ?? response?.planType.map(CodexAuth.planDisplayName)
         snapshot.accountLabel = auth.accountLabel
-        snapshot.tokens = report.tokens
-        snapshot.dailyUsage = report.dailyUsage
-        snapshot.histograms = report.histograms
+        // "Count the provider's own logs" gates the *usage* read from those
+        // logs, never the limits: the rate-limit fallback below still comes
+        // from the newest session file, because a window's reset time is a
+        // property of the account and not of who spent it. The parse itself
+        // still runs (it is cache-warm and the fallback needs it), so this
+        // switch changes what is shown, not what is read.
+        let countsLogs = UsageSourceGate.shared.current.providerLogs
+        snapshot.tokens = countsLogs ? report.tokens : nil
+        snapshot.dailyUsage = countsLogs ? report.dailyUsage : []
+        snapshot.histograms = countsLogs ? report.histograms : [:]
 
         if let response {
             let windows = CodexUsageAPI.limitWindows(from: response, now: now)
@@ -78,6 +85,9 @@ actor CodexProvider: UsageProvider, ProjectBreakdownProviding {
         }
         if snapshot.primary == nil {
             snapshot.limitsUnavailable = true
+            // Same reason as Claude: the scheduler cannot back off on a failure
+            // it never sees. See UsageSnapshot.limitsError.
+            snapshot.limitsError = limitsError
             snapshot.statusNotes.append("No rate-limit data: \(limitsError?.userMessage ?? "unavailable")")
         }
         // A dead token must not hide behind stale session-log gauges.
@@ -94,7 +104,14 @@ actor CodexProvider: UsageProvider, ProjectBreakdownProviding {
 
     /// Per-project/session token usage from the local session files, reusing the
     /// same warm cache `fetch()` fills. No cost column — Codex is plan-included.
-    func projectBreakdown(timeframe: BreakdownTimeframe, now: Date = .now) async -> ProjectBreakdown? {
+    func projectBreakdown(
+        timeframe: BreakdownTimeframe,
+        sources: UsageSourceSelection = UsageSourceGate.shared.current,
+        now: Date = .now
+    ) async -> ProjectBreakdown? {
+        // Codex has exactly one writer: its own CLI. No harness bills it, so
+        // the other two flags cannot change this answer.
+        guard sources.providerLogs else { return nil }
         let projects = await parser.breakdown(timeframe: timeframe, now: now)
         guard !projects.isEmpty else { return nil }
         let grandTotal = projects.reduce(into: TokenTotals()) { $0.add($1.totals) }
@@ -104,7 +121,8 @@ actor CodexProvider: UsageProvider, ProjectBreakdownProviding {
             generatedAt: now,
             projects: projects,
             grandTotal: grandTotal,
-            showsCost: false
+            // Costs are computed locally from token counts, same as Claude.
+            showsCost: true
         )
     }
 

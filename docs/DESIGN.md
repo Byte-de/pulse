@@ -346,6 +346,34 @@ Two-row block per provider (up to 2 providers shown; more → Settings picks):
 Pace badge: capsule, text 10 pt semibold in pace color, background pace-color
 `opacity(0.12)`, padding 6 h / 2 v. Texts: "On pace" / "1.3× pace" (§2.3).
 
+### 4.3b Ring gauge + simple view (added 2026-09-01)
+
+The panel has two modes (`SettingsStore.PanelMode`, persisted, toggled from the bottom
+bar or ⌘E). `full` is every card above. `simple` is the glance view:
+
+- `This Mac` column in compact form: CPU and memory only, each = title row + 5 pt bar +
+  34 pt sparkline. No P/E split, no disk card, no process tables. Disk survives as a
+  single amber/red line, **only above 90 % full**.
+- One 164 pt column per enabled provider (`Layout.glanceColumnWidth`), each carrying the
+  same `ProviderColumnHeader` pill as the columns layout, then one card:
+  1. `RingGauge`, 104 pt, 9 pt stroke, arc from 12 o'clock clockwise, track `trackFill`,
+     colour = threshold on raw utilization (§2.2), centre = percentage in
+     `GaugeDirection.displayValue` + 9 pt `left`/`used` caption.
+     Pace tick = 2 pt capsule standing 3 pt proud of the stroke on both sides,
+     `paceMarker` colour, at `GaugeDirection.markerPosition`.
+  2. Window title, then `resets in …` (60 s TimelineView — never 1 s, §4.7 rationale).
+  3. Hairline, then the weekly window as a normal `GaugeBar` with its percentage.
+- **Session ring above, weekly bar below.** The session is what runs out in the next
+  hour; the week is context for it. The first draft had this inverted and made the
+  slower number the headline.
+- No session window published (Cursor, Gemini, an idle Claude account) → the ring falls
+  back to the weekly window and the bar is dropped.
+- Not scrolled: the view exists because it fits. Growth past the screen is a signal the
+  view has outgrown its brief, not a reason to add a ScrollView.
+
+Every percentage here routes through `GaugeDirection.displayValue`, enforced by
+`scripts/check-gauge-direction.py`, which lists both new surfaces.
+
 ### 4.4 Usage Rate card (line chart)
 
 - Title row as §4.3 (no pace badge).
@@ -391,6 +419,9 @@ Pace badge: capsule, text 10 pt semibold in pace color, background pace-color
   spacer · `Settings` · `Quit` right. Text buttons 12 pt medium `.secondary`;
   hover → `.primary` + `cardFillHover` capsule behind (padding 8 h / 4 v);
   press → `press` token. ⌘Q maps to Quit, ⌘, to Settings, ⌘R to refresh.
+- Simple/full toggle sits **immediately left of the analytics button** and shows the
+  glyph for what it will do next, never for the state it is in:
+  `rectangle.expand.vertical` while simple, `rectangle.compress.vertical` while full.
 
 ### 4.8 Empty / not-connected state (per provider tab)
 
@@ -434,6 +465,7 @@ Errors never modal, never shake. Stale is a color, not an animation.
   crossfade path (Motion rule 4).
 - `ESC` closes: SwiftUI `.keyboardShortcut(.cancelAction)` + `cancelOperation` override
   as backstop — both route through the same completion-driven `hide()`.
+- `⌘E` toggles the simple / full panel mode (§4.3b).
 - `⌘R` manual refresh, `⌘,` Settings, `⌘Q` quit. Focus rings: `.focusEffectDisabled()`
   on decorative containers, default rings kept on real controls.
 

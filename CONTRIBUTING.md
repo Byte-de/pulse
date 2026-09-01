@@ -27,6 +27,22 @@ swift test
 The suite is currently **197 tests** and **must stay green**. Add tests for new logic;
 PRs that change behavior without covering it will be asked for tests.
 
+Two costs are invisible to `swift test`, because they only exist in a running,
+rendering app, and both have source-level checks with their own meta-tests:
+
+```sh
+python3 scripts/check-timeline-animation.py   # per-tick animation restarts
+bash scripts/verify-timeline-animation.sh     # meta-test: plants the defect
+python3 scripts/check-gauge-direction.py      # a percentage bypassing the direction setting
+bash scripts/verify-system-stats.sh           # the machine sampler, ~2 min
+```
+
+`check-timeline-animation.py` exists because a single `.animation(_:value:)`
+whose value derived from a `TimelineView`'s clock cost **34% of a core** with
+the panel open, and was misdiagnosed three times before it was found. If you add
+an animation inside a `TimelineView`, read the header of that script first.
+
+
 ## Where to start
 
 Read these before writing code — they are the source of truth:

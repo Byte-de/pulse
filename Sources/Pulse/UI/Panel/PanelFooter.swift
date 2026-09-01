@@ -24,11 +24,24 @@ struct PanelFooter: View {
                         .frame(width: 5, height: 5)
                         .opacity(dotPulsed ? 0.35 : 1)
                         .animation(Motion.staleTint, value: staleness.level)
+                    // NO `.animation(_:value:)` here, ever. This Text sits
+                    // inside a 1-second TimelineView, so an `.animation`
+                    // attached to it opens an animation transaction on EVERY
+                    // tick, whether or not the string changed - and a live
+                    // transaction makes SwiftUI redraw the whole panel's layer
+                    // tree at display rate rather than once per second.
+                    //
+                    // Measured on an M4 with the panel open and the machine
+                    // sidebar OFF: 34% of a core with the modifier, 0.3%
+                    // without it. That single line was the entire cost, not the
+                    // sampler and not the sidebar, both of which were blamed
+                    // first. `contentTransition` alone still animates the digit
+                    // change, driven by the value actually changing, so nothing
+                    // is lost visually.
                     Text(statusText(now: context.date))
                         .font(Typo.footer)
                         .foregroundStyle(.secondary)
                         .contentTransition(.numericText())
-                        .animation(Motion.numberTick, value: statusText(now: context.date))
                     Spacer()
                     refreshButton
                 }
@@ -95,7 +108,12 @@ struct PanelFooter: View {
 /// panel back into the menu bar) · quit.
 struct PanelBottomBar: View {
     let providerName: String
+    /// Which view is on screen now. The button shows the glyph for what it
+    /// will *do*, never for the state it is in - a toggle labelled with its own
+    /// state is read backwards by half the people who see it.
+    let mode: SettingsStore.PanelMode
     let openProvider: () -> Void
+    let toggleMode: () -> Void
     let openBreakdown: () -> Void
     let openSettings: () -> Void
     let minimize: () -> Void
@@ -106,6 +124,17 @@ struct PanelBottomBar: View {
             HStack(spacing: 4) {
                 BarButton(title: "Open \(providerName)", tint: PulseColor.info, action: openProvider)
                 Spacer()
+                // Immediately left of the analytics button: the two of them are
+                // the "show me more" pair, and this is the cheaper of the two.
+                GhostIconButton(
+                    systemImage: mode == .simple
+                        ? "rectangle.expand.vertical"
+                        : "rectangle.compress.vertical",
+                    help: mode == .simple
+                        ? "Show everything — rates, history, tokens (⌘E)"
+                        : "Back to the essentials — sessions, weekly, CPU, memory (⌘E)",
+                    action: toggleMode
+                )
                 GhostIconButton(systemImage: "chart.bar.xaxis", help: "Usage by project · session (⌘B)", action: openBreakdown)
                 BarButton(title: "Settings", action: openSettings)
                 GhostIconButton(systemImage: "minus", help: "Minimize — Pulse stays in the menu bar (esc)", action: minimize)

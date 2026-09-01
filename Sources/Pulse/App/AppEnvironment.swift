@@ -12,11 +12,21 @@ final class AppEnvironment {
     /// On-demand per-project/session analytics for the breakdown window. Shares
     /// the provider instances (and their warm caches) with the scheduler.
     let projectUsage: ProjectUsageService
+    /// Local machine stats for the panel sidebar. Polls only while a view is
+    /// subscribed, so it costs nothing with the panel closed.
+    let system = SystemMonitor()
     /// True when launched with `--demo-data`: the breakdown shows Byte-branded
     /// mock data instead of the user's logs (for screenshots and demos).
     let isDemoData = ProcessInfo.processInfo.arguments.contains("--demo-data")
 
     init() {
+        // Account discovery MUST run before SettingsStore is constructed.
+        // SettingsStore reads ProviderID.allCases in its initialiser to decide
+        // which persisted ids are still valid, so an empty registry at that
+        // moment silently discards every discovered account and rewrites
+        // UserDefaults without them.
+        ProviderRegistry.shared.register(claudeAccounts: ClaudeAccount.discover().map(\.id))
+
         let settings = SettingsStore()
         let store = UsageStore()
         let history = HistoryStore()

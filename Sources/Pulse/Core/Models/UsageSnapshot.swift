@@ -66,6 +66,17 @@ struct UsageSnapshot: Sendable, Equatable {
     /// over a one-tick network blip.
     var limitsUnavailable = false
 
+    /// The error behind `limitsUnavailable`, when there was one.
+    ///
+    /// A limits-only failure deliberately does NOT throw - the token history is
+    /// still worth showing - but that made the failure invisible to the
+    /// scheduler, which saw a successful fetch and reset its backoff on every
+    /// tick. A provider that was rate-limited therefore kept being called at
+    /// the normal interval and kept renewing its own penalty. Carrying the
+    /// error on the snapshot is what lets the scheduler back off (and honour
+    /// `Retry-After`) without the UI losing the half of the data that worked.
+    var limitsError: ProviderFetchError?
+
     init(providerID: ProviderID, fetchedAt: Date = .now) {
         self.providerID = providerID
         self.fetchedAt = fetchedAt

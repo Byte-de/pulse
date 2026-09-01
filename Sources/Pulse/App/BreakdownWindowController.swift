@@ -32,6 +32,13 @@ final class BreakdownWindowController {
         if let initialProvider, model.supportedProviders.contains(initialProvider) {
             model.selectedProvider = initialProvider
         }
+        // The selection is persisted and the window is cached, so a provider
+        // disabled since the last open would otherwise stay selected with no
+        // tab to switch away from.
+        if !model.supportedProviders.contains(model.selectedProvider),
+           let fallback = model.supportedProviders.first {
+            model.selectedProvider = fallback
+        }
         let window = self.window ?? makeWindow()
         self.window = window
         NSApp.activate(ignoringOtherApps: true)
@@ -69,8 +76,11 @@ final class BreakdownWindowController {
         window.title = "Usage Breakdown"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 880, height: 600))
-        window.contentMinSize = NSSize(width: 560, height: 360)
+        window.setContentSize(NSSize(width: 1240, height: 600))
+        // Four token columns + two cost columns (~480pt) ride on top of the
+        // base table, so the floor rises with them: below this the project
+        // name column collapses into an ellipsis.
+        window.contentMinSize = NSSize(width: 900, height: 360)
         window.setFrameAutosaveName("PulseBreakdownWindow")
         window.center()
 
