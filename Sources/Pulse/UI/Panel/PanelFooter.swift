@@ -24,11 +24,24 @@ struct PanelFooter: View {
                         .frame(width: 5, height: 5)
                         .opacity(dotPulsed ? 0.35 : 1)
                         .animation(Motion.staleTint, value: staleness.level)
+                    // NO `.animation(_:value:)` here, ever. This Text sits
+                    // inside a 1-second TimelineView, so an `.animation`
+                    // attached to it opens an animation transaction on EVERY
+                    // tick, whether or not the string changed - and a live
+                    // transaction makes SwiftUI redraw the whole panel's layer
+                    // tree at display rate rather than once per second.
+                    //
+                    // Measured on an M4 with the panel open and the machine
+                    // sidebar OFF: 34% of a core with the modifier, 0.3%
+                    // without it. That single line was the entire cost, not the
+                    // sampler and not the sidebar, both of which were blamed
+                    // first. `contentTransition` alone still animates the digit
+                    // change, driven by the value actually changing, so nothing
+                    // is lost visually.
                     Text(statusText(now: context.date))
                         .font(Typo.footer)
                         .foregroundStyle(.secondary)
                         .contentTransition(.numericText())
-                        .animation(Motion.numberTick, value: statusText(now: context.date))
                     Spacer()
                     refreshButton
                 }

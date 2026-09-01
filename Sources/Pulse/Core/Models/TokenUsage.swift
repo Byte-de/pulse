@@ -53,6 +53,30 @@ struct TokenUsageReport: Sendable, Equatable {
     var modelBreakdown: [ModelShare]
     /// Whether the Cost column should render (false for plan-included usage like Codex).
     var showsCost: Bool
+    /// The slice of `today` produced by sub-agent (child) sessions. Always a
+    /// **subset** of `today`, never an addition to it: a sub-agent's tokens are
+    /// already counted in the headline row, so a card that added the two would
+    /// double-count. Zero for sources that can't distinguish sub-agents
+    /// (Claude Code never records a sub-agent's turns at all).
+    var todaySubAgent: TokenTotals = .zero
+    /// The slice of `thisMonth` produced by sub-agent sessions. Same subset rule.
+    var thisMonthSubAgent: TokenTotals = .zero
+
+    /// True when any sub-agent usage was observed in either window — the gate
+    /// for showing the sub-agent rows at all.
+    var hasSubAgentUsage: Bool { Self.isSubAgentSliceVisible(todaySubAgent) || Self.isSubAgentSliceVisible(thisMonthSubAgent) }
+
+    /// Whether one window's sub-agent slice is worth a row of its own.
+    ///
+    /// An all-zero slice is not "a sub-agent that used nothing", it is **no
+    /// sub-agent**: pi records no session parentage at all and Claude Code
+    /// never logs a sub-agent's turns, so a row of zeros there states a fact
+    /// about the harness the reader will misread as a fact about their usage.
+    /// Cost is checked alongside the counters so a priced-but-tokenless slice
+    /// (impossible today, cheap to be right about) still shows.
+    static func isSubAgentSliceVisible(_ slice: TokenTotals) -> Bool {
+        slice.total > 0 || (slice.costUSD ?? 0) > 0
+    }
 }
 
 /// One bar of the "Daily Usage" chart.

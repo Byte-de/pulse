@@ -12,10 +12,21 @@ import Foundation
 protocol ProjectBreakdownProviding: Sendable {
     var id: ProviderID { get }
 
-    /// Per-project/session usage over `timeframe`. Returns `nil` when the
-    /// provider has no attributable usage in the window (the window shows an
-    /// empty state). Never throws: a breakdown is a best-effort read over local
-    /// files, and a transient read failure should degrade to "nothing yet",
-    /// not surface an error in the analytics view.
-    func projectBreakdown(timeframe: BreakdownTimeframe, now: Date) async -> ProjectBreakdown?
+    /// Per-project/session usage over `timeframe`, counting only `sources`.
+    /// Returns `nil` when the provider has no attributable usage in the window
+    /// (the window shows an empty state). Never throws: a breakdown is a
+    /// best-effort read over local files, and a transient read failure should
+    /// degrade to "nothing yet", not surface an error in the analytics view.
+    ///
+    /// **`sources` is passed in rather than read from `UsageSourceGate`.** The
+    /// gate is the *panel's* setting, one process-wide answer to "what am I
+    /// spending"; the breakdown window asks a different question - "what did
+    /// this tool cost on this project" - and has to be able to flip a source on
+    /// and off without changing what the menu bar reports. Two questions, two
+    /// answers, so the filter travels with the query.
+    func projectBreakdown(
+        timeframe: BreakdownTimeframe,
+        sources: UsageSourceSelection,
+        now: Date
+    ) async -> ProjectBreakdown?
 }

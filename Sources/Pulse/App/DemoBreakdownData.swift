@@ -7,7 +7,13 @@ import Foundation
 struct DemoBreakdownProvider: ProjectBreakdownProviding {
     let id: ProviderID
 
-    func projectBreakdown(timeframe: BreakdownTimeframe, now: Date) async -> ProjectBreakdown? {
+    /// The demo dataset has one fixed shape, so the source filter is accepted
+    /// and ignored: screenshots must look the same however the switches sit.
+    func projectBreakdown(
+        timeframe: BreakdownTimeframe,
+        sources: UsageSourceSelection,
+        now: Date
+    ) async -> ProjectBreakdown? {
         DemoBreakdownData.breakdown(for: id, timeframe: timeframe, now: now)
     }
 

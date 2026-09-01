@@ -33,6 +33,43 @@ enum Formatters {
         String(format: "$%.2f", value)
     }
 
+    // MARK: - Bytes
+
+    /// "12.4 GB", "870 MB" — base-1000 like the rest of macOS (Finder, Activity
+    /// Monitor), NOT base-1024, so Pulse never disagrees with the numbers the
+    /// user can check against.
+    static func bytes(_ value: Int64) -> String {
+        let magnitude = Double(abs(value))
+        switch magnitude {
+        case ..<1000:
+            return "\(value) B"
+        case ..<1_000_000:
+            return trimmed(magnitude / 1000) + " KB"
+        case ..<1_000_000_000:
+            return trimmed(magnitude / 1_000_000) + " MB"
+        case ..<1_000_000_000_000:
+            return trimmed(magnitude / 1_000_000_000) + " GB"
+        default:
+            return trimmed(magnitude / 1_000_000_000_000) + " TB"
+        }
+    }
+
+    /// "1.6G", "310M" - unit-suffixed with no space, for narrow table columns
+    /// where "1.6 GB" would push the row into truncating the name beside it.
+    static func compactBytes(_ value: Int64) -> String {
+        let magnitude = Double(abs(value))
+        switch magnitude {
+        case ..<1000:
+            return "\(value)B"
+        case ..<1_000_000:
+            return trimmed(magnitude / 1000) + "K"
+        case ..<1_000_000_000:
+            return String(Int((magnitude / 1_000_000).rounded())) + "M"
+        default:
+            return trimmed(magnitude / 1_000_000_000) + "G"
+        }
+    }
+
     // MARK: - Percent
 
     static func percent(_ value: Double) -> String {
@@ -118,5 +155,21 @@ enum ModelNames {
             name.replaceSubrange(range, with: "-\(version)")
         }
         return name
+    }
+
+    /// Attribution bucket for a session whose model jcode never resolved.
+    static let unknown = "unknown"
+
+    /// jcode records the model on the session, and decorates it with a routing
+    /// suffix the pricing table does not know: `claude-opus-5[1m]` is the same
+    /// model as `claude-opus-5`, requested with a 1M context window. The
+    /// bracketed part is stripped so both bill and group as one model. A
+    /// session jcode never resolved is reported as `unknown` rather than
+    /// dropped, so the token totals stay honest even when attribution can't be.
+    static func normalizedJcodeModel(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return unknown }
+        guard let bracket = raw.firstIndex(of: "[") else { return raw }
+        let base = String(raw[raw.startIndex..<bracket])
+        return base.isEmpty ? raw : base
     }
 }

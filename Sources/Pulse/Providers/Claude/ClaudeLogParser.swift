@@ -53,6 +53,12 @@ struct ClaudeLogParser: Sendable {
         var firstActivity: Date?
         var lastActivity: Date?
         var entries: [Entry]
+        /// True when the session was spawned by another session (jcode's
+        /// `parent_id`). Optional so caches written before the field existed
+        /// still decode; `nil` reads as "not a sub-agent". Claude Code never
+        /// sets it — it does not record a sub-agent's turns at all
+        /// (docs/HANDOFF-jcode-subagent-attribution.md, Appendix A).
+        var isSubAgent: Bool?
     }
 
     let projectsRoot: URL
@@ -76,15 +82,21 @@ struct ClaudeLogParser: Sendable {
 
     func report(now: Date = .now) async -> TokenReportBundle {
         let calendar = Calendar.current
+        let sessions = await sessions(now: now)
+        guard !sessions.isEmpty else { return TokenReportBundle(tokens: nil, dailyUsage: []) }
+        return Self.rollUp(sessions: sessions, calendar: calendar, now: now)
+    }
+
+    /// The parsed session files themselves, so a caller can merge them with
+    /// another harness's sessions for the same account (jcode) and roll the
+    /// combined set up once.
+    func sessions(now: Date = .now) async -> [SessionFile] {
         // A year of files feeds the 1y histogram; the per-file cache makes the
         // wide window a one-time cost (only changed files re-parse afterwards).
         let since = now.addingTimeInterval(-366 * 24 * 3600)
-
         let files = FileSnapshot.enumerate(root: projectsRoot, pathExtension: "jsonl", modifiedSince: since)
-        guard !files.isEmpty else { return TokenReportBundle(tokens: nil, dailyUsage: []) }
-
-        let sessions = await cache.aggregates(for: files) { try Self.parseSession($0, captureTitles: captureTitles) }
-        return Self.rollUp(sessions.map(\.entries), calendar: calendar, now: now)
+        guard !files.isEmpty else { return [] }
+        return await cache.aggregates(for: files) { try Self.parseSession($0, captureTitles: captureTitles) }
     }
 
     // MARK: - Per-file parse
@@ -222,18 +234,36 @@ struct ClaudeLogParser: Sendable {
 
     // MARK: - Global dedup + rollups
 
+    /// Rolls up whole sessions, so each entry keeps the sub-agent flag of the
+    /// session it came from and the card can show the sub-agent slice.
+    static func rollUp(sessions: [SessionFile], calendar: Calendar, now: Date) -> TokenReportBundle {
+        rollUp(sessions.map { (entries: $0.entries, isSubAgent: $0.isSubAgent ?? false) }, calendar: calendar, now: now)
+    }
+
+    /// Entry-list form, used by callers that have no session context (their
+    /// usage is main-session by definition).
     static func rollUp(_ entryLists: [[Entry]], calendar: Calendar, now: Date) -> TokenReportBundle {
+        rollUp(entryLists.map { (entries: $0, isSubAgent: false) }, calendar: calendar, now: now)
+    }
+
+    static func rollUp(
+        _ entryLists: [(entries: [Entry], isSubAgent: Bool)],
+        calendar: Calendar,
+        now: Date
+    ) -> TokenReportBundle {
         // Global dedup across all files: keyed entries collapse to the
         // max-output record (streamed partials precede finals); keyless
         // entries are all kept.
-        var best: [String: Entry] = [:]
-        var keyless: [Entry] = []
-        for entry in entryLists.joined() {
-            if let key = entry.key {
-                if let existing = best[key], existing.outputForDedup >= entry.outputForDedup { continue }
-                best[key] = entry
-            } else {
-                keyless.append(entry)
+        var best: [String: (entry: Entry, isSubAgent: Bool)] = [:]
+        var keyless: [(entry: Entry, isSubAgent: Bool)] = []
+        for list in entryLists {
+            for entry in list.entries {
+                if let key = entry.key {
+                    if let existing = best[key], existing.entry.outputForDedup >= entry.outputForDedup { continue }
+                    best[key] = (entry, list.isSubAgent)
+                } else {
+                    keyless.append((entry, list.isSubAgent))
+                }
             }
         }
 
@@ -245,15 +275,18 @@ struct ClaudeLogParser: Sendable {
 
         var today = TokenTotals()
         var month = TokenTotals()
+        var todaySub = TokenTotals()
+        var monthSub = TokenTotals()
         var perModelMonth: [String: TokenTotals] = [:]
         var perDay: [Date: TokenTotals] = [:]
         var perHourToday: [Date: TokenTotals] = [:]
         let todayStart = calendar.startOfDay(for: now)
 
-        func accumulate(_ entry: Entry) {
+        func accumulate(_ entry: Entry, isSubAgent: Bool) {
             let totals = totals(of: entry)
             if entry.day == todayKey {
                 today.add(totals)
+                if isSubAgent { todaySub.add(totals) }
                 if let hour = entry.hour,
                    let bucket = calendar.date(byAdding: .hour, value: hour, to: todayStart) {
                     perHourToday[bucket, default: .zero].add(totals)
@@ -261,6 +294,7 @@ struct ClaudeLogParser: Sendable {
             }
             if entry.day.hasPrefix(monthPrefix) {
                 month.add(totals)
+                if isSubAgent { monthSub.add(totals) }
                 // Bucket by display name so dated aliases of the same model
                 // ("claude-haiku-4-5-20251001") merge into one row.
                 perModelMonth[ModelNames.display(entry.model), default: .zero].add(totals)
@@ -269,8 +303,8 @@ struct ClaudeLogParser: Sendable {
                 perDay[calendar.startOfDay(for: date), default: .zero].add(totals)
             }
         }
-        for entry in best.values { accumulate(entry) }
-        for entry in keyless { accumulate(entry) }
+        for item in best.values { accumulate(item.entry, isSubAgent: item.isSubAgent) }
+        for item in keyless { accumulate(item.entry, isSubAgent: item.isSubAgent) }
 
         guard month.total > 0 || today.total > 0 || !perDay.isEmpty else {
             return TokenReportBundle(tokens: nil, dailyUsage: [])
@@ -287,7 +321,14 @@ struct ClaudeLogParser: Sendable {
 
         let week = UsageMath.lastSevenDays(from: perDay, calendar: calendar, now: now)
         return TokenReportBundle(
-            tokens: TokenUsageReport(today: today, thisMonth: month, modelBreakdown: breakdown, showsCost: true),
+            tokens: TokenUsageReport(
+                today: today,
+                thisMonth: month,
+                modelBreakdown: breakdown,
+                showsCost: true,
+                todaySubAgent: todaySub,
+                thisMonthSubAgent: monthSub
+            ),
             dailyUsage: week,
             histograms: [
                 .day: UsageMath.hoursOfToday(from: perHourToday, calendar: calendar, now: now),
@@ -321,12 +362,9 @@ struct ClaudeLogParser: Sendable {
     /// `report()` fills. The file window is identical to `report()`'s, so the
     /// two callers share cache entries with no thrash and no extra parse.
     func breakdown(timeframe: BreakdownTimeframe, now: Date = .now) async -> [ProjectUsage] {
-        let calendar = Calendar.current
-        let since = now.addingTimeInterval(-366 * 24 * 3600)
-        let files = FileSnapshot.enumerate(root: projectsRoot, pathExtension: "jsonl", modifiedSince: since)
-        guard !files.isEmpty else { return [] }
-        let sessions = await cache.aggregates(for: files) { try Self.parseSession($0, captureTitles: captureTitles) }
-        return Self.rollUpBreakdown(sessions, timeframe: timeframe, calendar: calendar, now: now)
+        let sessions = await sessions(now: now)
+        guard !sessions.isEmpty else { return [] }
+        return Self.rollUpBreakdown(sessions, timeframe: timeframe, calendar: Calendar.current, now: now)
     }
 
     /// Groups cached sessions into projects, filtering each session's entries to
@@ -372,7 +410,8 @@ struct ClaudeLogParser: Sendable {
                 startedAt: session.firstActivity,
                 lastActivity: lastActivity,
                 isActive: now.timeIntervalSince(lastActivity) < liveThreshold,
-                modelBreakdown: UsageMath.modelShares(perModel)
+                modelBreakdown: UsageMath.modelShares(perModel),
+                isSubAgent: session.isSubAgent ?? false
             )
             aggregator.add(
                 sessionUsage,

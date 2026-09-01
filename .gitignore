@@ -14,3 +14,6 @@ docs/RESEARCH/
 # The app falls back to SF Symbols when these are absent; drop your own
 # exports here (see PulseIcons.swift for the name mapping).
 Sources/Pulse/Resources/Icons/
+
+# Lavish Editor review artifacts — local design surfaces, regenerated on demand.
+.lavish/

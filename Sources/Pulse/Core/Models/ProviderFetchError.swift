@@ -22,6 +22,8 @@ enum ProviderFetchError: Error, Sendable, Equatable {
         switch self {
         case .notLoggedIn(let hint): hint
         case .network: "Can't reach the network"
+        case .http(429): "Rate limited by the provider — retrying later"
+        case .http(let status) where status >= 500: "Provider is having trouble (\(status))"
         case .http(let status): "Service error (\(status))"
         case .unauthorized: "Session expired — sign in again"
         case .parsing: "Unexpected data from provider"

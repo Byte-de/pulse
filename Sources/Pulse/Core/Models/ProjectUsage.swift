@@ -89,6 +89,10 @@ struct SessionUsage: Sendable, Equatable, Identifiable {
     var isActive: Bool
     /// Per-model split of this session's tokens, sorted descending by share.
     var modelBreakdown: [ModelShare] = []
+    /// True when this session was spawned by another session (jcode writes a
+    /// `parent_id`). Sub-agent-ness is a property of the *session*, at any
+    /// nesting depth: a child of a child is still sub-agent work.
+    var isSubAgent: Bool = false
 }
 
 /// Usage rolled up for one **project** — a working directory, the natural
@@ -110,6 +114,28 @@ struct ProjectUsage: Sendable, Equatable, Identifiable {
     var isActive: Bool
     /// Member sessions, sorted descending by token total.
     var sessions: [SessionUsage] = []
+    /// The slice of `totals` contributed by sub-agent sessions. A **subset** of
+    /// `totals`, never an addition: `totals` already includes it. The
+    /// main-session-only figure is `mainTotals`, so no caller has to remember
+    /// the direction of the subtraction.
+    var subAgentTotals: TokenTotals = .zero
+    /// Number of member sessions that are sub-agent runs.
+    var subAgentSessionCount: Int = 0
+
+    /// Main-session usage only: everything not attributed to a sub-agent.
+    var mainTotals: TokenTotals {
+        TokenTotals(
+            input: totals.input - subAgentTotals.input,
+            output: totals.output - subAgentTotals.output,
+            cacheRead: totals.cacheRead - subAgentTotals.cacheRead,
+            cacheWrite: totals.cacheWrite - subAgentTotals.cacheWrite,
+            // nil cost stays nil: a project with no priced model must not
+            // report $0 main cost just because the subtraction is trivial.
+            costUSD: totals.costUSD.map { $0 - (subAgentTotals.costUSD ?? 0) }
+        )
+    }
+
+    var hasSubAgentUsage: Bool { subAgentTotals.total > 0 }
 }
 
 /// One provider's complete breakdown for a timeframe — the value the breakdown
@@ -128,6 +154,17 @@ struct ProjectBreakdown: Sendable, Equatable, Identifiable {
     var id: ProviderID { providerID }
     var isEmpty: Bool { projects.isEmpty }
     var sessionCount: Int { projects.reduce(0) { $0 + $1.sessionCount } }
+
+    /// Sub-agent slice of `grandTotal` (a subset of it, see
+    /// `ProjectUsage.subAgentTotals`).
+    var subAgentTotal: TokenTotals {
+        projects.reduce(into: TokenTotals()) { $0.add($1.subAgentTotals) }
+    }
+
+    /// True when any project carries sub-agent usage — the gate for the
+    /// sub-agent columns, so providers that can't see sub-agents (Claude Code,
+    /// Codex) keep the narrow table rather than a column of zeros.
+    var showsSubAgents: Bool { projects.contains(where: \.hasSubAgentUsage) }
 
     /// A copy with every session title cleared — used to honor the content-blind
     /// setting immediately in the UI, even before a relaunch re-parses without
@@ -166,6 +203,10 @@ struct ProjectUsageAggregator {
             project.sessions.append(session)
             project.lastActivity = max(project.lastActivity, session.lastActivity)
             project.isActive = project.isActive || session.isActive
+            if session.isSubAgent {
+                project.subAgentTotals.add(session.totals)
+                project.subAgentSessionCount += 1
+            }
             byProject[projectKey] = project
         } else {
             byProject[projectKey] = ProjectUsage(
@@ -176,7 +217,9 @@ struct ProjectUsageAggregator {
                 sessionCount: 1,
                 lastActivity: session.lastActivity,
                 isActive: session.isActive,
-                sessions: [session]
+                sessions: [session],
+                subAgentTotals: session.isSubAgent ? session.totals : .zero,
+                subAgentSessionCount: session.isSubAgent ? 1 : 0
             )
         }
     }
